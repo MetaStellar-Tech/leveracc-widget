@@ -1,0 +1,106 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #eaf0f7;
+  color: #203b58;
+  font:
+    15px/1.6 system-ui,
+    sans-serif;
+}
+main {
+  max-width: 1020px;
+  margin: 60px auto;
+  display: grid;
+  grid-template-columns: 1fr 440px;
+  gap: 60px;
+  padding: 24px;
+}
+h1 {
+  font:
+    700 44px/1.1 "Trebuchet MS",
+    sans-serif;
+  letter-spacing: -0.045em;
+  margin: 18px 0;
+}
+h2 {
+  font-size: 15px;
+}
+p {
+  color: #526c87;
+}
+label {
+  display: block;
+  font-size: 12px;
+  margin: 14px 0 6px;
+}
+input,
+select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #bdcbdd;
+  border-radius: 7px;
+  background: #fff;
+  font: inherit;
+}
+button {
+  font: inherit;
+  background: #245cdb;
+  color: white;
+  padding: 10px 15px;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  margin-top: 16px;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #fff;
+  border-radius: 8px;
+  padding: 14px;
+  font-size: 11px;
+  max-height: 160px;
+  overflow: auto;
+}
+small {
+  color: #63758a;
+}
+.eyebrow {
+  letter-spacing: 0.14em;
+  color: #245cdb;
+  font-size: 11px;
+  font-weight: 700;
+}
+.widget-slot {
+  align-self: start;
+  min-width: 0;
+}
+@media (max-width: 800px) {
+  main {
+    grid-template-columns: 1fr;
+    gap: 30px;
+    max-width: 490px;
+    margin: 12px auto;
+  }
+  h1 {
+    font-size: 34px;
+  }
+}
+
+.theme-preview {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid #bdcbdd;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.theme-preview label {
+  margin-top: 0;
+  font-weight: 600;
+}
+.theme-preview p {
+  margin: 8px 0 0;
+  font-size: 12px;
+}

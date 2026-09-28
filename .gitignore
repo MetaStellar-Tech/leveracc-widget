@@ -1,0 +1,18 @@
+node_modules/
+dist/
+examples-dist/
+coverage/
+test-results/
+playwright-report/
+
+*.tgz
+
+.env
+.env.local
+.env.*.local
+artifacts/
+
+.cache/
+
+# Lock integrity changes with each local archive rebuild.
+examples/npm/package-lock.json

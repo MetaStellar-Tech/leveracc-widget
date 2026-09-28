@@ -1,0 +1,30 @@
+name: Publish npm package
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+      - name: Validate version and select dist-tag
+        id: version
+        run: node scripts/release-version.mjs
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm release:check
+      - name: Publish verified tarball with npm trusted publishing
+        run: npm publish artifacts/leveracc-widget-${{ steps.version.outputs.version }}.tgz --access public --tag ${{ steps.version.outputs.tag }}

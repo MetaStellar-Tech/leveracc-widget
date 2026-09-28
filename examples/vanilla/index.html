@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>LeverAcc · JavaScript integration</title>
+  </head>
+  <body>
+    <main>
+      <section>
+        <div class="eyebrow">JAVASCRIPT INTEGRATION / TESTNET</div>
+        <h1>One mount.<br />A complete panel.</h1>
+        <p>
+          Use this framework-independent entry with Vue, plain HTML, or another
+          frontend.
+        </p>
+        <label for="locale">Widget language</label>
+        <select id="locale">
+          <option value="en">English</option>
+          <option value="zh">中文</option>
+        </select>
+        <label for="project">Project ID</label
+        ><input
+          id="project"
+          value="0xb5aa45fa7dc556ccc2af82c0a6bb44407b32634c9b384862a27ccae5486fef91"
+        /><button id="apply">Apply configuration & use host wallet</button>
+        <p>
+          <small
+            >Supply an EIP-1193 provider from your application's wallet
+            connection.</small
+          >
+        </p>
+        <button id="refresh">Host authorization complete · refresh</button>
+        <h2>Integration events</h2>
+        <pre id="events">No events yet.</pre>
+      </section>
+      <div class="widget-slot">
+        <div class="theme-preview">
+          <label for="theme">Widget theme</label>
+          <select id="theme">
+            <option value="dark">Default dark · 默认暗色</option>
+            <option value="light">Default light · 默认亮色</option>
+            <option value="midnight">Midnight dark · 午夜蓝暗色</option>
+            <option value="lavender">Lavender light · 薰衣草亮色</option>
+          </select>
+          <p>
+            Switch themes to preview the widget instantly.
+            切换主题，即时预览效果。
+          </p>
+        </div>
+        <div id="widget"></div>
+      </div>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

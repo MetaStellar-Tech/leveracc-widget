@@ -1,0 +1,26 @@
+import { useState } from 'react';
+import en from '../../../leveracc-dapp/messages/en.json';
+import zh from '../../../leveracc-dapp/messages/zh.json';
+const noop = () => {};
+export const runtimeHyperEvmChainId = 999;
+export const config = {contractConfig:{leverAccFundVaultManagerAddress:'0x4444444444444444444444444444444444444444'}};
+export default config;
+export const useTranslations = (namespace = '') => (key: string, values: Record<string, unknown> = {}) => {
+ const messages = new URLSearchParams(location.search).get('locale') === 'zh' ? zh : en;
+ const text = `${namespace}.${key}`.split('.').filter(Boolean).reduce((m:any,k)=>m?.[k],messages);
+ return typeof text === 'string' ? text.replace(/\{(\w+)\}/g, (_,k)=>String(values[k] ?? k)) : key;
+};
+export const useFormatter = () => ({number:(n:number,options:object)=>n.toLocaleString('en-US',options)});
+export const useAuth = () => ({user:{walletAddress:'0x1111111111111111111111111111111111111111'}});
+export const useGasBalanceWarning = () => ({isSuccess:true,data:{value:1000000000000000000n},refetch:async()=>({data:{value:1000000000000000000n}})});
+export const needsAccountCreationGas = () => false;
+export const notifyOnboardingAccountCreated = noop;
+export const useArbitrumGasTopUp = () => ({submitting:false,processing:false});
+export const useCoreAccountGas = useArbitrumGasTopUp;
+export const ACCOUNT_GAS_USDC = 1;
+export const useReadContract = () => ({data:'0x4444444444444444444444444444444444444444'});
+export const useAccountTokenBalance = () => ({data:1250000000n});
+export const useArbitrumUsdcBalanceUnits = () => ({data:1250000000n});
+export const useHyperliquidSpotUsdcBalance = () => ({data:{available:425.495},refetch:async()=>({data:{available:425.495}})});
+export const useHyperliquidCoreToEvmTransfer = () => ({transfer:async()=>{},resetTransferSuccess:noop});
+export const useCctpDeposit = () => { const [amount,setAmount] = useState(''); return {stage:"idle",busy:false,amount,setAmount,units:amount?BigInt(Math.round(Number(amount)*1e6)):null,feeLimit:null,balances:{data:{balance:1250000000n}},enabled:true,valid:false,needsApproval:true,approve:noop,deposit:noop}; };
