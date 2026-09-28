@@ -120,6 +120,23 @@ widget.destroy(); // 可重复调用
 
 移除了旧版 `apiBaseUrl`、`indexerUrl` 与 `defaultTab`；`protocolServiceUrl` 用于创建前充值记录查询。入口区不自动打开业务弹窗。功能关闭后，对应弹窗关闭，控制器阻止新签名和提交；已提交交易继续跟踪。
 
+### 第三方集成的网络部署
+
+`network` 为每个 Widget 实例选择下列协议合约。地址内置于包中，`WidgetConfig` 不提供合约地址覆盖字段。协议部署更新时需要更新包版本。自定义 RPC URL 只改变请求端点，必须连接所选网络。外部 Arbitrum 充值会在读取余额或请求签名前拒绝链 ID 不匹配的 RPC。
+
+| 配置 | `mainnet` | `testnet` |
+| --- | --- | --- |
+| HyperEVM 链 ID | `999` | `998` |
+| Arbitrum 链 ID | `42161` | `421614` |
+| AccountFactory | `0x7211c8159449b99f0b7cdb6b7a9ea01b2e5c1ce7` | `0xe672fc21d0e429076b4386d20b5951eba214aedb` |
+| FundVaultManager | `0x03524982bba6763d045d1a44f3c090ffcf39774b` | `0x99d8f178af00b229cbc00676f42f0a492bdef52c` |
+| CoreDepositWallet | `0x6b9e773128f453f5c2c60935ee2de2cbc5390a24` | `0x0b80659a4076e9e93c7dbe0f10675a16a3e5c206` |
+| Protocol Service | `https://protocol-service.leveracc.xyz` | `https://protocol-service-testnet.leveracc.xyz` |
+
+请提供所选网络中已注册的项目方 `projectId`，不要复制 LeverAcc dapp 的自营策略项目 ID。Widget 会将宿主项目 ID 传入开户、项目绑定和借款流程；项目注册、执行钱包及风险钱包授权由项目方负责。已有账户可能需要先绑定项目才能借款。切换网络不会自动注册或迁移项目。
+
+账户的 Registry 和 Manager 的 USDC 资产从链上读取，不固定 FundVault 代际地址。主网与测试网实例可以共存；切换某个实例时，应传入完整配置，包含目标网络的项目 ID 及所需的自定义 RPC／服务 URL。省略这些 URL 会使用新网络的默认值。测试网 Gas 充值使用 HyperCore，主网 Gas 充值使用 Arbitrum One。测试网外部 Fund 充值和提现使用 Arbitrum Sepolia，但不支持通过 CCTP 直接转发到 HyperCore。
+
 ## 账户与资金流程
 
 - Fund 为宿主钱包的 owner EOA；Trade 为 Factory `primaryAccountOf(owner)` 返回的 LAAccount。读取失败显示错误，不视作无账户。

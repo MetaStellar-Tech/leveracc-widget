@@ -120,6 +120,23 @@ Without a build tool, host `dist/widget.js` and use the global `LeverAcc.mountLe
 
 The legacy `apiBaseUrl`, `indexerUrl`, and `defaultTab` options have been removed; `protocolServiceUrl` queries top-up records before account creation. The entry area does not automatically open operation modals. Disabling a feature closes its modal and prevents new signatures and submissions through the controller; already submitted transactions continue to be tracked.
 
+### Network deployments for third-party integrations
+
+`network` selects the protocol contracts below for each widget instance. These addresses are built into the package; `WidgetConfig` does not expose contract address overrides. Updating a protocol deployment requires updating the package. Custom RPC URLs change the transport endpoint only and must serve the selected network. External Arbitrum deposits reject an RPC with a mismatched chain ID before reading balances or requesting signatures.
+
+| Configuration | `mainnet` | `testnet` |
+| --- | --- | --- |
+| HyperEVM chain ID | `999` | `998` |
+| Arbitrum chain ID | `42161` | `421614` |
+| AccountFactory | `0x7211c8159449b99f0b7cdb6b7a9ea01b2e5c1ce7` | `0xe672fc21d0e429076b4386d20b5951eba214aedb` |
+| FundVaultManager | `0x03524982bba6763d045d1a44f3c090ffcf39774b` | `0x99d8f178af00b229cbc00676f42f0a492bdef52c` |
+| CoreDepositWallet | `0x6b9e773128f453f5c2c60935ee2de2cbc5390a24` | `0x0b80659a4076e9e93c7dbe0f10675a16a3e5c206` |
+| Protocol Service | `https://protocol-service.leveracc.xyz` | `https://protocol-service-testnet.leveracc.xyz` |
+
+Supply your own registered `projectId` for the selected network. Do not copy the LeverAcc dapp's self-strategy project ID. The widget passes the host project ID into account creation, project binding, and borrowing; registration and execution/risk wallet authorization remain the project operator's responsibility. An existing account can require project binding before borrowing. Switching networks does not register or migrate a project.
+
+The account's Registry and the manager's USDC asset are read on chain. FundVault generation addresses are not pinned. Mainnet and testnet instances can coexist; when switching an instance, pass the complete configuration with the target network's project ID and any custom RPC/service URLs. Omitting those URLs selects the new network's defaults. Testnet gas funding uses HyperCore; mainnet gas funding uses Arbitrum One. Testnet external Fund deposits and withdrawals use Arbitrum Sepolia, while CCTP forwarding directly to HyperCore is unavailable on testnet.
+
 ## Accounts and fund flows
 
 - Fund is the host wallet's owner EOA; Trade is the LAAccount returned by Factory `primaryAccountOf(owner)`. Read failures show an error and are not treated as an absent account.

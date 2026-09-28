@@ -3,6 +3,7 @@ import type { ResolvedConfig } from "../core/config";
 import { publicRpc } from "../protocol/port";
 import { cctpDeployment, cctpRoute } from "./cctp";
 import { CctpUsdcABI } from "../abi/generated/CctpUsdc";
+import { invariant } from "../core/errors";
 export interface BridgeClients {
   evm: PublicClient;
   arb: PublicClient;
@@ -18,6 +19,11 @@ export function bridgeClients(config: ResolvedConfig): BridgeClients {
     evm,
     arb,
     balances: async (owner: Address) => {
+      invariant(
+        (await arb.getChainId()) === config.arbitrumChain.id,
+        "RPC_NETWORK_MISMATCH",
+        "Arbitrum RPC endpoint does not match the configured network.",
+      );
       const [balance, allowance, gas] = await Promise.all([
         arb.readContract({
           address: deployment.usdc,
