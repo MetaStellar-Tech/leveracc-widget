@@ -3,7 +3,6 @@ import { Skeleton } from "./Skeleton";
 import { useEffect } from "react";
 import type { useWidgetForm } from "./useWidgetForm";
 import { formatAmount } from "../core/amount";
-import { reasonText } from "./strings";
 export function LendingForm({
   model: m,
 }: {
@@ -148,25 +147,6 @@ export function LendingForm({
           {busy ? t.submitting : t.borrowAction}
         </button>
       </div>
-      {s.reasons.length > 0 && (
-        <div className="notice">
-          <strong>{t.setupTitle}</strong>
-          <ul>
-            {s.reasons.map((reason) => (
-              <li key={reason}>{reasonText(reason, config.locale)}</li>
-            ))}
-          </ul>
-          {m.hasAccountSetup && (
-            <button
-              className="secondary"
-              disabled={busy || pending}
-              onClick={m.setupAccount}
-            >
-              {t.completeSetup}
-            </button>
-          )}
-        </div>
-      )}
       {!!units && <p className="note">{t.borrowNote}</p>}
     </div>
   );

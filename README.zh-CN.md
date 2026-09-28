@@ -50,7 +50,7 @@ npm install @leveracc/widget react react-dom
 
 ## 钱包接入与完整流程
 
-提供 viem、wagmi、Privy 适配器和真实 SDK 示例，见 [钱包接入文档](docs/WALLET_INTEGRATION.zh-CN.md)。React 示例使用 wagmi 连接器，Privy 示例位于 `/examples/privy/`。`onConnect` 打开宿主钱包连接界面；可选 `onAccountSetup` 和 `onGasTopUp` 接入项目方授权与 Gas 服务，并在完成后验证链上状态。基础组件不会强制宿主安装 wagmi / Privy。
+提供 viem、wagmi、Privy 适配器和真实 SDK 示例，见 [钱包接入文档](docs/WALLET_INTEGRATION.zh-CN.md)。React 示例使用 wagmi 连接器，Privy 示例位于 `/examples/privy/`。`onConnect` 打开宿主钱包连接界面；可选 `onAccountSetup` 和 `onGasTopUp` 接入项目方授权与 Gas 服务，并在完成后验证链上状态。默认快速借入弹窗不显示账户设置说明或设置按钮，项目方须在自己的页面提供设置流程。`onAccountSetup` 和控制器的 `setupAccount()` 继续保留以兼容已有集成。借入仍须满足链上前置条件。基础组件不会强制宿主安装 wagmi / Privy。
 
 ## 接入
 

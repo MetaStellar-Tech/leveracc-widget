@@ -89,6 +89,8 @@ adapter.destroy();
 
 钱包连接不等于项目交易授权。新建 LAAccount 并不自动生成项目 Execution Wallet 授权或设置 Risk Wallet。项目方须根据自己的服务契约实现这些操作；wagmi / Privy 本身无法提供项目方签名。
 
+默认快速借入弹窗不显示账户设置说明或设置按钮。项目方须在自己的页面提供账户设置流程。`onAccountSetup` 和控制器的 `setupAccount()` 继续保留以兼容已有集成，但默认弹窗不会调用它们。链上前置条件未满足时仍会阻止借入。
+
 Widget 默认内置 3 USDC 充值流程。可选回调让宿主覆盖充值或接入项目授权：
 
 ```tsx

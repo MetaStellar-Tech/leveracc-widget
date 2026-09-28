@@ -50,7 +50,7 @@ Before the first release, install a maintainer-provided `.tgz`. Third-party proj
 
 ## Wallet integration and complete flows
 
-Adapters and real SDK examples are provided for viem, wagmi, and Privy; see the [wallet integration guide](docs/WALLET_INTEGRATION.md). The React example uses wagmi connectors, and the Privy example is in `/examples/privy/`. `onConnect` opens the host's wallet connection UI. Optional `onAccountSetup` and `onGasTopUp` callbacks integrate project authorization and gas services, followed by on-chain state verification. The base widget does not require the host to install wagmi / Privy.
+Adapters and real SDK examples are provided for viem, wagmi, and Privy; see the [wallet integration guide](docs/WALLET_INTEGRATION.md). The React example uses wagmi connectors, and the Privy example is in `/examples/privy/`. `onConnect` opens the host's wallet connection UI. Optional `onAccountSetup` and `onGasTopUp` callbacks integrate project authorization and gas services, followed by on-chain state verification. The default Quick Borrow dialog does not display account setup instructions or an account setup button; the host application must provide its own setup flow. `onAccountSetup` and the controller’s `setupAccount()` remain available for compatibility. Borrowing still requires the on-chain prerequisites to be met. The base widget does not require the host to install wagmi / Privy.
 
 ## Integration
 

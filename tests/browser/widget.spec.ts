@@ -144,16 +144,35 @@ test("borrow opens a modal, reviews live pricing, and never logs in to v1", asyn
   ).toBe(false);
   expect(errors).toEqual([]);
 });
-test("missing authorization still blocks borrowing", async ({ page }) => {
-  await mountMockWidget(page, "en", { unauthorized: true });
-  await page.getByRole("button", { name: "Borrow", exact: true }).click();
-  await page.getByLabel("Amount", { exact: true }).fill("10");
-  await expect(
-    page
-      .getByRole("dialog")
-      .getByRole("button", { name: "Borrow", exact: true }),
-  ).toBeDisabled();
-});
+for (const locale of ["en", "zh"]) {
+  test(`${locale}: missing authorization blocks borrowing without a setup entry`, async ({
+    page,
+  }) => {
+    await mountMockWidget(page, locale, { unauthorized: true });
+    await page.evaluate(() => {
+      (window as any).testWidget.update({
+        onAccountSetup: async () => {
+          throw new Error("Account setup must be handled by the host page");
+        },
+      });
+    });
+    await page
+      .getByRole("button", {
+        name: locale === "en" ? "Borrow" : "借款",
+        exact: true,
+      })
+      .click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("textbox").fill("10");
+    await expect(dialog.locator(".primary")).toBeDisabled();
+    await expect(dialog.locator(".notice")).toHaveCount(0);
+    await expect(
+      dialog.getByRole("button", {
+        name: locale === "en" ? "Complete account setup" : "完成账户设置",
+      }),
+    ).toHaveCount(0);
+  });
+}
 test("feature updates close disabled dialogs and allow every feature to be hidden", async ({
   page,
 }) => {

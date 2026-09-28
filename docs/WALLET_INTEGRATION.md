@@ -89,6 +89,8 @@ Pass a connected JSON-RPC WalletClient. This browser integration does not suppor
 
 Connecting a wallet does not grant project trading authorization. Creating an LAAccount does not automatically authorize a project Execution Wallet or configure a Risk Wallet. The project operator must implement those operations according to its own service contract; wagmi / Privy cannot provide project signatures themselves.
 
+The default Quick Borrow dialog does not display account setup instructions or an account setup button. The host application must provide its own account setup flow. `onAccountSetup` and the controller’s `setupAccount()` remain available for compatibility, but the default dialog does not invoke them. Borrowing remains blocked until the on-chain prerequisites are met.
+
 The widget includes a default 3 USDC top-up flow. Optional callbacks let the host override top-ups or integrate project authorization:
 
 ```tsx
