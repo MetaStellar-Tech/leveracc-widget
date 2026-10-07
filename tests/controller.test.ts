@@ -635,7 +635,7 @@ describe("creation history guard", () => {
     history([paid]);
     const { c } = make();
     await c.connect();
-    expect(await c.creationReadiness()).toEqual({
+    expect(await c.creationReadiness()).toMatchObject({
       gas: 1000000000000000000n,
       hasTopUp: true,
       funding: { state: "idle" },
@@ -926,4 +926,73 @@ describe("creation payment history opt-out", () => {
       }
     },
   );
+});
+
+describe("creation confirmation", () => {
+  async function submitPending() {
+    created = false;
+    const { c } = make();
+    c.update({ config: { ...config, skipCreationTopUpCheck: true } });
+    await c.connect();
+    await c.createAccount();
+    await c.refresh();
+    return c;
+  }
+  it("keeps creation pending until the primary account is verified, without resubmitting", async () => {
+    const c = await submitPending();
+    expect(c.getSnapshot()).toMatchObject({
+      status: "noAccount",
+      creationPending: true,
+    });
+    expect((await c.creationReadiness()).ready).toBe(false);
+    await c.createAccount();
+    expect(mock.write).toHaveBeenCalledOnce();
+    created = true;
+    await c.refresh();
+    expect(c.getSnapshot()).toMatchObject({
+      status: "ready",
+      account,
+      creationPending: false,
+    });
+  });
+  it("restores creation after remount and survives receipt read failure", async () => {
+    const c = await submitPending();
+    c.destroy();
+    mock.receipt.mockRejectedValueOnce(Error("RPC unavailable"));
+    const { c: fresh } = make();
+    await fresh.connect();
+    expect(fresh.getSnapshot().creationPending).toBe(true);
+    expect(mock.write).toHaveBeenCalledOnce();
+    created = true;
+    await fresh.refresh();
+    expect(fresh.getSnapshot()).toMatchObject({
+      status: "ready",
+      creationPending: false,
+    });
+  });
+  it("clears pending creation only after an explicit revert", async () => {
+    const c = await submitPending();
+    mock.receipt.mockResolvedValueOnce({ status: "reverted" });
+    await c.refresh();
+    expect(c.getSnapshot().creationPending).toBe(false);
+    expect(c.getSnapshot().error).toContain("reverted");
+    await c.createAccount();
+    expect(mock.write).toHaveBeenCalledTimes(2);
+  });
+  it("does not report success for an initialized account with the wrong project", async () => {
+    const c = await submitPending();
+    const original = mock.read.getMockImplementation()!;
+    mock.read.mockImplementation(async (call) =>
+      call.functionName === "projectId"
+        ? `0x${"cd".repeat(32)}`
+        : original(call),
+    );
+    created = true;
+    await c.refresh();
+    expect(c.getSnapshot()).toMatchObject({
+      status: "noAccount",
+      creationPending: true,
+    });
+    expect(c.getSnapshot().error).toContain("does not match");
+  });
 });

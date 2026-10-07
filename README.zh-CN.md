@@ -119,7 +119,7 @@ widget.destroy(); // 可重复调用
 | `borrow.expiryWindowSeconds`  | `900`                      | intent 有效期，1–3600 秒                                                 |
 | `arbitrumWithdrawalEnabled`   | `true`                    | 主网与测试网均支持，需确认部署支持 Circle forwarding                                 |
 
-设置 `config.skipCreationTopUpCheck: true` 后，创建账户仅校验当前网络 HyperEVM 上 Fund wallet（owner EOA）的实时余额是否至少为 0.01 HYPE，不请求付款历史；付款历史服务不可用不会阻止创建，但余额不足或余额读取失败仍会阻止。余额不足时仍可使用内置 3 USDC 充值或 `onGasTopUp`；内置充值需要可用的充值路由配置。余额足够时跳过充值及回调。配置变更会使旧检测结果失效。创建成功不代表已激活，项目方负责后续激活检测；现有签名、账户归属、项目绑定及后续操作校验保持不变。示例见[钱包集成](docs/WALLET_INTEGRATION.zh-CN.md)。
+设置 `config.skipCreationTopUpCheck: true` 后，创建账户仅校验当前网络 HyperEVM 上 Fund wallet（owner EOA）的实时余额是否至少为 0.01 HYPE，没有待处理内置付款时不请求付款历史；付款历史服务不可用不会阻止创建，但余额不足或余额读取失败仍会阻止。余额不足时仍可使用内置 3 USDC 充值或 `onGasTopUp`；内置充值需要可用的充值路由配置。余额足够时跳过充值及回调。配置变更会使旧检测结果失效。创建成功不代表已激活，项目方负责后续激活检测；现有签名、账户归属、项目绑定及后续操作校验保持不变。示例见[钱包集成](docs/WALLET_INTEGRATION.zh-CN.md)。
 
 移除了旧版 `apiBaseUrl`、`indexerUrl` 与 `defaultTab`；`protocolServiceUrl` 用于创建前充值记录查询。入口区不自动打开业务弹窗。功能关闭后，对应弹窗关闭，控制器阻止新签名和提交；已提交交易继续跟踪。
 
@@ -143,7 +143,7 @@ widget.destroy(); // 可重复调用
 ## 账户与资金流程
 
 - Fund 为宿主钱包的 owner EOA；Trade 为 Factory `primaryAccountOf(owner)` 返回的 LAAccount。读取失败显示错误，不视作无账户。
-- 默认情况下，创建弹窗同时检查 owner 在 Protocol Service 中单笔成功充值 3 USDC 的历史记录和至少 0.01 HYPE Gas，再签名提交创建。后续账户读取验证 owner、factory、project、binding epoch，不等待创建回执。刷新或重新打开会恢复历史充值状态；满足两项条件时跳过 `onGasTopUp`。查询失败时禁止充值和创建，等待重试。未配置 `onGasTopUp` 时提供内置 3 USDC 充值：主网从 Arbitrum 原生 USDC 转账，测试网从 HyperCore Spot 转账，收款地址读取 Protocol Service 配置。传入回调可覆盖默认流程。
+- 默认创建要求 Protocol Service 中成功的单笔 3 USDC 历史充值记录及至少 0.01 HYPE。弹窗每 5 秒自动检查未满足的条件，就绪后显示“签名并创建账户”。签名前再次检查条件，提交后每 3 秒检查回执，验证 Factory 映射及账户的 owner、factory、project 和 binding epoch，确认后显示完成。不提供手动刷新按钮。主网充值转账 Arbitrum 原生 USDC，测试网使用 HyperCore Spot；收款地址来自 Protocol Service 配置。`onGasTopUp` 覆盖内置充值流程，之后自动检查状态。
 - 顶部三栏展示账户地址与复制、自有净值（抵押品）／可用交易余额／债务、负债比例（风险指数）。抵押品取 HyperEVM USDC + HyperCore 自有资金（详见下文）；可用交易余额为 Spot USDC `total - hold`，最低为零，为零时不回退到 Perps；风险指数为债务 / `accountNetValueNow`，并非清算阈值。指标读取失败显示 `—`。
 - **Withdraw 提现**：独立 `withdraw` 开关，选择 Fund 或 Trade 来源并提现至 owner 的 Arbitrum 钱包。主网对应 HyperEVM 999 → Arbitrum One 42161；测试网对应 HyperEVM 998 → Arbitrum Sepolia 421614。默认 RPC、原生 USDC、Circle 合约、费用 API 和 intent 链 ID 均跟随 `network`。Trade MAX 为 `max(0, min(safeUserClaimable, EVM + max(Core Spot - 0.005 USDC, 0) - payableInterestNow))`。Core Spot 使用 Hyperliquid spot API，将 total 和 hold 分别截断到六位小数后相减。补足 EVM 时同时预留利息与提现金额。`arbitrumWithdrawalEnabled` 默认启用；不支持的部署可显式设为 `false`，界面会说明不可用原因。预览仍须允许足额转出。Fund 直接通过 Circle 授权、跨链。每笔交易发出后即结束，不恢复历史交易。打开或重新打开弹窗、提交交易后，重新读取来源余额／额度和 owner 的目标网络 USDC 余额。Trade 显示“可提现”，Fund 显示钱包余额。读取失败显示不可用，不视作零余额；重新打开弹窗可重试。费用参数在当前控件生命周期内按网络和方向缓存，输入金额时本地计算，不刷新余额或禁用输入框。提交前重新核验费用；费用上涨需重新确认。提交状态不占用提现弹窗布局，错误通过悬浮提示展示。最新费用和到账金额更新在原有字段中，通过主按钮确认下一次尝试，不显示独立核对区块。取消钱包确认后保留当前步骤，关闭并重新打开弹窗也能继续，不会重复已提交的步骤。
 - 创建后的 TradeAccount 使用顶部静态交易账户卡展示地址、抵押品、已借款、交易可用额及风险指标。`features.tradingAccount` 控制地址复制按钮；抵押品 info 支持 hover、键盘和触屏查看 HyperEVM / HyperCore 分布。不下单，不创建、刷新或配置 Execution/Risk API Wallet。
@@ -154,7 +154,7 @@ widget.destroy(); // 可重复调用
 - 充值支持 owner HyperCore Spot → owner HyperEVM Fund，以及 Arbitrum → owner HyperEVM Fund（主网：Arbitrum One 42161 → HyperEVM 999；测试网：Arbitrum Sepolia 421614 → HyperEVM Testnet 998）。测试网可在 Deposit 弹窗选择“外部充值”，使用 Arbitrum Sepolia 原生测试 USDC 和 ETH 支付 gas；费用查询使用 Circle sandbox，授权和跨链合约均匹配测试网。原有 Fund → Trade EVM 的控制器方法保留；主界面通过 Account Transfer 为 Trade 充值。
 - 借款使用链上额度、风险参数、nonce 和费率版本；输入金额后在原表单内显示利率、期限与费用上限，费率变化需重新确认。借入 USDC 到达 Trade EVM。
 - 还款使用 Trade EVM 余额；全额还款包含 0.1% 利息授权缓冲，实际扣款由实时债务限制。余额不足时提示先划转。
-- 所有交易返回 hash（或 Core 接口确认提交成功）后即进入 `submitted` 状态，不等待回执或到账。提交不代表链上执行成功。
+- 所有交易返回 hash 或 Core 确认提交后发出 `operationSubmitted`，提交不代表执行成功。开户及其 Gas 充值额外跟踪确认和到账；其他交易流程仍在提交时结束。
 
 ## 事件与恢复
 
@@ -168,9 +168,9 @@ widget.destroy(); // 可重复调用
 
 缺少链上交易授权、风险钱包、项目绑定或 Core 激活时显示具体阻塞原因，并发出 `accountActionRequired`。宿主可自行处理后调用 `refresh()`，widget 不调用宿主业务 API。
 
-交易不写入 localStorage，也不在刷新或重新挂载后恢复。初始化尽力删除旧版 Widget 交易缓存；存储损坏或不可用不影响操作。实例锁与 Web Locks 仅保护正在签名和提交的请求，成功或失败后释放。多步流程只在当前 Widget 内存中保留继续入口，不阻塞其他功能；点击继续时重新检查实时余额及授权，条件不足提示稍后重试。切换钱包、网络或项目时清除流程。
+开户和内置 Gas 充值在 localStorage 保存待处理交易标识，按网络、服务及 owner 隔离，开户还按项目隔离；重开或刷新页面后恢复核实。广播前必须能够使用存储。待处理充值验证来源转账日志、匹配的服务端状态、HYPE 发放回执及余额；本地记录不是付款证明。旧交易清理保留这些新记录。其他交易仍只保存在内存中。实例锁与 Web Locks 防止并发提交。
 
-请求失败且提交结果未知时显示错误并释放锁，不自动重发；用户重试前可通过钱包检查结果。已取得 hash 后，余额刷新失败不会把“已发出”改成失败。创建账户仍检查真实 HYPE 余额和服务端成功充值资格，通过“刷新状态”手动重试查询。
+开户或 Gas 充值提交结果未知时，自动检查继续进行，同时禁止重复发送。临时 RPC 或服务错误会自动重试查询，不重发交易；后台终态失败显示原因并保持付款锁定。明确拒签可重试，明确回滚会清除对应待处理记录。快照的 `creationPending` 和 `creationFundingPending` 表示开户和充值待确认状态。控制器的 `creationReadiness()` 还返回 `creating` 以及 funding 的 `state`、`error` 和 `pollAfter`（毫秒）。其他交易的重试行为不变。
 
 ## 开发与验证
 
@@ -195,7 +195,7 @@ pnpm test:browser
 - 提现：来源为 Fund 或 Trade，目标为 owner 在 Arbitrum 的钱包。Fund 先授权 Circle，再发起跨链；Trade 默认启用，可通过 `arbitrumWithdrawalEnabled: false` 关闭，不足时先从 Core Spot 补足 Trade EVM，之后显式继续跨链。合约限制导致无法足额转出时阻止提交。
 - Fund ↔ Trade 保留在划转入口；不恢复历史内部提现记录。底层原有方法没有移除，`TransferRoute` 新增 `fundToArbitrum`。
 - 报价在表单内显示，费用上涨需重新确认。授权通过 `operationSubmitted` 的 `action: "bridgeApproval"` 报告已发出，不代表授权已生效或提现到账。
-- 创建账户内置充值需要来源网络的 3 USDC；主网还需 Arbitrum ETH 支付 gas。充值发出后不缓存或跟踪，服务端历史 pending 记录不锁定再次操作。除非开启 `skipCreationTopUpCheck`，否则直接转入 HYPE 不能替代成功充值资格。
+- 内置充值需要来源网络的 3 USDC；主网还需 Arbitrum ETH 支付 gas。待处理转账可恢复且禁止重复发送。充值状态采用服务端轮询间隔，默认 5 秒。除非开启 `skipCreationTopUpCheck`，否则直接转入 HYPE 不能替代历史充值资格；开启该选项后，已有待处理内置付款仍通过服务端记录跟踪。
 
 视觉对照使用参考仓库的真实组件及固定测试数据，不启动其后端、不修改参考仓库：
 

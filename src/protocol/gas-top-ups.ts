@@ -3,6 +3,8 @@ import { invariant } from "../core/errors";
 
 export interface GasTopUpRecord {
   id?: string;
+  created_at?: string;
+  next_poll_after_seconds?: number;
   requested_usdc_amount_raw?: string;
   phase?: string;
   terminal?: boolean;

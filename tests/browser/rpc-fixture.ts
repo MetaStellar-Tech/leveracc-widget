@@ -46,11 +46,17 @@ export async function mockBackend(
     skipCreationTopUpCheck?: boolean;
     topUpError?: boolean;
     gasFunding?: boolean;
+    delayedCreationReceipt?: boolean;
     unauthorized?: boolean;
     unbound?: boolean;
     dailyRatePpm?: number;
   } = {},
 ) {
+  let creationConfirmed = !options.delayedCreationReceipt;
+  if (options.delayedCreationReceipt)
+    await page.exposeFunction("__completeCreation", () => {
+      creationConfirmed = true;
+    });
   const gasReceiver = "0x5555555555555555555555555555555555555555";
   const gasUsdc = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
   const gasTargetHash = `0x${"aa".repeat(32)}`;
@@ -58,6 +64,8 @@ export async function mockBackend(
     gasReceived = false;
   const gasRecord = () => ({
     id: "gas-payment",
+    created_at: new Date().toISOString(),
+    system_core_account_address: gasReceiver,
     requested_usdc_amount_raw: "3000000",
     ...(options.mainnet
       ? { source_chain_id: 42161, source_tx_hash: hash }
@@ -352,48 +360,50 @@ export async function mockBackend(
             }
             if (!matched) result = "0x";
           } else if (request.method === "eth_getTransactionReceipt")
-            result = {
-              transactionHash: hash,
-              transactionIndex: "0x0",
-              blockHash: `0x${"11".repeat(32)}`,
-              blockNumber: "0x1",
-              from: owner,
-              to: options.gasFunding
-                ? url.includes("arbitrum")
-                  ? gasUsdc
-                  : owner
-                : account,
-              cumulativeGasUsed: "0x5208",
-              gasUsed: "0x5208",
-              effectiveGasPrice: "0x1",
-              contractAddress: null,
-              logs:
-                options.gasFunding && url.includes("arbitrum")
-                  ? [
-                      {
-                        address: gasUsdc,
-                        topics: encodeEventTopics({
-                          abi: IERC20ABI,
-                          eventName: "Transfer",
-                          args: { from: owner, to: gasReceiver },
-                        }),
-                        data: encodeAbiParameters(
-                          [{ type: "uint256" }],
-                          [3_000_000n],
-                        ),
-                        blockNumber: "0x1",
-                        blockHash: `0x${"11".repeat(32)}`,
-                        transactionHash: hash,
-                        transactionIndex: "0x0",
-                        logIndex: "0x0",
-                        removed: false,
-                      },
-                    ]
-                  : [],
-              logsBloom: `0x${"00".repeat(256)}`,
-              status: "0x1",
-              type: "0x2",
-            };
+            result = !creationConfirmed
+              ? null
+              : {
+                  transactionHash: hash,
+                  transactionIndex: "0x0",
+                  blockHash: `0x${"11".repeat(32)}`,
+                  blockNumber: "0x1",
+                  from: owner,
+                  to: options.gasFunding
+                    ? url.includes("arbitrum")
+                      ? gasUsdc
+                      : owner
+                    : account,
+                  cumulativeGasUsed: "0x5208",
+                  gasUsed: "0x5208",
+                  effectiveGasPrice: "0x1",
+                  contractAddress: null,
+                  logs:
+                    options.gasFunding && url.includes("arbitrum")
+                      ? [
+                          {
+                            address: gasUsdc,
+                            topics: encodeEventTopics({
+                              abi: IERC20ABI,
+                              eventName: "Transfer",
+                              args: { from: owner, to: gasReceiver },
+                            }),
+                            data: encodeAbiParameters(
+                              [{ type: "uint256" }],
+                              [3_000_000n],
+                            ),
+                            blockNumber: "0x1",
+                            blockHash: `0x${"11".repeat(32)}`,
+                            transactionHash: hash,
+                            transactionIndex: "0x0",
+                            logIndex: "0x0",
+                            removed: false,
+                          },
+                        ]
+                      : [],
+                  logsBloom: `0x${"00".repeat(256)}`,
+                  status: "0x1",
+                  type: "0x2",
+                };
           else if (request.method === "eth_blockNumber") result = "0x2";
           else if (request.method === "eth_chainId")
             result = url.includes("arbitrum")

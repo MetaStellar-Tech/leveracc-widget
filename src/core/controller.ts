@@ -1,3 +1,11 @@
+import {
+  fundingStatus,
+  creationKey,
+  loadCreation,
+  saveCreation,
+  clearCreation,
+  confirmCreation,
+} from "../protocol/creation-tracking";
 import { zeroAddress, type Address, type Hex } from "viem";
 import {
   prepareAccountTransfer,
@@ -69,6 +77,8 @@ import { CctpUsdcABI } from "../abi/generated/CctpUsdc";
 
 const empty = (): Snapshot => ({
   status: "disconnected",
+  creationPending: false,
+  creationFundingPending: false,
   reasons: [],
   busy: false,
   owner: undefined,
@@ -193,6 +203,12 @@ export class WidgetController {
   }
   setupAccount = () => this.hostAction("setup");
   topUpGas = async () => {
+    if (this.state.owner)
+      invariant(
+        !loadCreation(creationKey(this.config, this.state.owner)),
+        "FUNDING_PENDING",
+        "Gas funding is already pending.",
+      );
     if (this.options.onGasTopUp) return this.hostAction("gas");
     invariant(
       !this.state.busy && terminal(this.state.operation),
@@ -245,7 +261,13 @@ export class WidgetController {
       if (current()) this.report(error, { ...this.context(config), owner });
       throw error;
     } finally {
-      if (current()) this.patch({ busy: false });
+      if (current())
+        this.patch({
+          busy: false,
+          creationFundingPending: Boolean(
+            loadCreation(creationKey(config, owner)),
+          ),
+        });
     }
   };
   getSnapshot = () => this.state;
@@ -432,8 +454,27 @@ export class WidgetController {
         return this.refresh();
       }
       this.patch({ owner });
-      const port = this.port(config, owner, undefined, generation),
-        account = await primary(port, config, owner);
+      const port = this.port(config, owner, undefined, generation);
+      if (isCurrent())
+        this.patch({
+          creationPending: Boolean(
+            loadCreation(creationKey(config, owner, "create")),
+          ),
+        });
+      try {
+        if (!(await confirmCreation(config, owner, port))) {
+          if (isCurrent()) this.patch({ status: "noAccount" });
+          return;
+        }
+      } finally {
+        if (isCurrent())
+          this.patch({
+            creationPending: Boolean(
+              loadCreation(creationKey(config, owner, "create")),
+            ),
+          });
+      }
+      const account = await primary(port, config, owner);
       if (this.state.account && !same(this.state.account, account)) {
         this.invalidate();
         return this.refresh();
@@ -494,7 +535,13 @@ export class WidgetController {
           });
           return;
         }
-        this.patch({ status: hasContent ? this.state.status : "readError" });
+        this.patch({
+          status: this.state.creationPending
+            ? "noAccount"
+            : hasContent
+              ? this.state.status
+              : "readError",
+        });
         this.report(e);
       }
     }
@@ -603,6 +650,28 @@ export class WidgetController {
         let port: ProtocolPort;
         let didSubmit = false;
         const progress = (stage: Stage, hash?: Hex) => {
+          if (
+            action === "createAccount" &&
+            (stage === "submitting" || (stage === "submitted" && hash))
+          ) {
+            saveCreation(
+              creationKey(config, owner, "create"),
+              {
+                source: "create",
+                hash,
+                receiver: config.factory,
+                hypeBefore: "0",
+                createdAt: Date.now(),
+              },
+              stage === "submitted",
+            );
+          }
+          if (
+            action === "createAccount" &&
+            (stage === "submitting" || stage === "submitted") &&
+            generation === this.generation
+          )
+            this.patch({ creationPending: true });
           if (stage === "submitted") didSubmit = true;
           this.progress(op, stage, hash, generation);
         };
@@ -670,6 +739,8 @@ export class WidgetController {
           }
         } catch (error) {
           const e = normalizeError(error);
+          if (action === "createAccount" && e.code === "USER_REJECTED")
+            clearCreation(creationKey(config, owner, "create"));
           op.error = e.message;
           if (
             op.stage === "submitting" &&
@@ -719,9 +790,12 @@ export class WidgetController {
       config = this.config,
       generation = this.generation;
     invariant(owner, "WALLET_NOT_CONNECTED", "Connect a wallet first.");
+    this.patch({
+      creationFundingPending: Boolean(loadCreation(creationKey(config, owner))),
+    });
     const [gas, records] = await Promise.all([
       this.port(config, owner, undefined, generation).nativeBalance(owner),
-      config.skipCreationTopUpCheck
+      config.skipCreationTopUpCheck && !loadCreation(creationKey(config, owner))
         ? []
         : listGasTopUps(config.protocolServiceUrl, owner),
     ]);
@@ -732,22 +806,40 @@ export class WidgetController {
       "CONTEXT_CHANGED",
       "Wallet context changed.",
     );
-    const funding = {
-      state: "idle" as const,
-      error: undefined as string | undefined,
-    };
+    const funding = await fundingStatus(config, owner, gas, records);
+    invariant(
+      generation === this.generation &&
+        !this.disposed &&
+        same(owner, this.state.owner),
+      "CONTEXT_CHANGED",
+      "Wallet context changed.",
+    );
+    this.patch({ creationFundingPending: funding.state !== "idle" });
+    const creating = Boolean(
+      loadCreation(creationKey(config, owner, "create")),
+    );
     const hasTopUp = records.some(isCreationTopUp);
     return {
       gas,
       hasTopUp,
       funding,
+      creating,
       ready:
+        funding.state === "idle" &&
+        !funding.error &&
+        !creating &&
         (config.skipCreationTopUpCheck || hasTopUp) &&
         gas >= CREATION_GAS_MINIMUM,
     };
   }
   createAccount = () =>
     this.run("createAccount", async (port, config, owner) => {
+      invariant(
+        !loadCreation(creationKey(config, owner, "create")),
+        "CREATION_PENDING",
+        "Account creation is awaiting confirmation.",
+      );
+      if (!same(await primary(port, config, owner), zeroAddress)) return;
       const readiness = await this.creationReadiness();
       invariant(
         config.skipCreationTopUpCheck || readiness.hasTopUp,

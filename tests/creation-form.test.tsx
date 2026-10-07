@@ -66,7 +66,7 @@ it("ignores an old owner's late response", async () => {
   await act(async () => resolve(ready));
   expect(createButton()).toBeUndefined();
 });
-it("disables funding on failure and recovers on explicit refresh", async () => {
+it("recovers automatically after a failed read without a refresh button", async () => {
   check
     .mockRejectedValueOnce(new Error("Service unavailable"))
     .mockResolvedValue(ready);
@@ -74,18 +74,9 @@ it("disables funding on failure and recovers on explicit refresh", async () => {
   expect(container.querySelector('[role="alert"]')?.textContent).toBe(
     "Service unavailable",
   );
-  expect(container.querySelector("button")?.disabled).toBe(true);
+  expect(container.textContent).not.toContain(en.refreshStatus);
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(15000);
-  });
-  expect(check).toHaveBeenCalledTimes(1);
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(45000);
-  });
-  await act(async () => {
-    [...container.querySelectorAll("button")]
-      .find((b) => b.textContent === en.refreshStatus)!
-      .click();
+    await vi.advanceTimersByTimeAsync(5000);
   });
   expect(createButton()?.disabled).toBe(false);
 });
@@ -112,17 +103,22 @@ it("does not overlap a slow readiness request", async () => {
   expect(check).toHaveBeenCalledTimes(1);
   expect(createButton()?.disabled).toBe(false);
 });
-it("does not poll an unfunded account", async () => {
-  check.mockResolvedValue({ ...ready, ready: false });
+it("polls a low balance and stops when creation is available", async () => {
+  check
+    .mockResolvedValueOnce({ ...ready, ready: false })
+    .mockResolvedValue(ready);
   await render();
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(10000);
-  });
-  expect(check).toHaveBeenCalledTimes(1);
+  expect(createButton()).toBeUndefined();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(5000);
   });
-  expect(check).toHaveBeenCalledTimes(1);
+  expect(check).toHaveBeenCalledTimes(2);
+  expect(createButton()?.disabled).toBe(false);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15000);
+  });
+  expect(check).toHaveBeenCalledTimes(2);
+  expect(c.createAccount).not.toHaveBeenCalled();
 });
 
 it("rechecks on opt-out changes and discards the old response", async () => {

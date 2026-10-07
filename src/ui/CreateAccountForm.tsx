@@ -18,7 +18,7 @@ export function CreateAccountForm({
   t: typeof en;
   onDone: () => void;
 }) {
-  const context = `${s.owner}:${c.config.network}:${c.config.projectId}:${c.config.rpcUrl}:${c.config.protocolServiceUrl}:${c.config.skipCreationTopUpCheck}`;
+  const context = `${s.owner}:${c.config.network}:${c.config.projectId}:${c.config.rpcUrl}:${c.config.arbitrumRpcUrl}:${c.config.protocolServiceUrl}:${c.config.skipCreationTopUpCheck}`;
   const currentContext = useRef(context);
   currentContext.current = context;
   const sequence = useRef(0);
@@ -74,11 +74,46 @@ export function CreateAccountForm({
       running.current = undefined;
     };
   }, [c, context]);
+  useEffect(() => {
+    if (checking || s.busy || (s.status === "ready" && s.account)) return;
+    const value = result?.context === context ? result.value : undefined;
+    if (
+      (!s.creationPending && value?.ready) ||
+      value?.funding?.state === "failed"
+    )
+      return;
+    const timer = setTimeout(
+      () => {
+        void (async () => {
+          await c.refresh();
+          await refresh();
+        })();
+      },
+      s.creationPending || value?.creating
+        ? 3000
+        : (value?.funding?.pollAfter ?? 5000),
+    );
+    return () => clearTimeout(timer);
+  }, [
+    c,
+    context,
+    result,
+    s.busy,
+    s.status,
+    s.account,
+    s.creationPending,
+    checking,
+  ]);
   const current = result?.context === context ? result : undefined;
   const gas = current?.value?.gas,
     error = current?.error ?? current?.value?.funding?.error;
   const done = s.status === "ready" && Boolean(s.account),
-    gasReady = current?.value?.ready === true,
+    creating = current?.value?.creating === true || s.creationPending === true,
+    fundingPending =
+      current?.value?.funding?.state === "pending" ||
+      current?.value?.funding?.state === "failed" ||
+      s.creationFundingPending === true,
+    gasReady = current?.value?.ready === true || creating,
     pending = checking || !current,
     blocked = pending || !!error;
   const source = c.config.network === "mainnet" ? "Arbitrum" : "HyperCore";
@@ -108,7 +143,11 @@ export function CreateAccountForm({
             <CreationGasStep
               source={source}
               t={t}
-              disabled={blocked || s.busy}
+              disabled={blocked || s.busy || fundingPending}
+              pending={fundingPending}
+              failure={
+                current?.value?.funding?.state === "failed" ? error : undefined
+              }
               submitting={s.busy}
               onFund={topUp}
             />
@@ -145,7 +184,8 @@ export function CreateAccountForm({
           {(done || gasReady) && (
             <p>{done ? t.accountCreated : t.createDescription}</p>
           )}
-          {!done && gasReady && (
+          {!done && creating && <p role="status">{t.creationPending}</p>}
+          {!done && gasReady && !creating && (
             <button
               className="primary"
               disabled={
@@ -173,23 +213,16 @@ export function CreateAccountForm({
           )}
         </div>
       </div>
-      <button
-        className="text-button"
-        disabled={checking || s.busy}
-        onClick={() => {
-          void c.refresh();
-          void refresh();
-        }}
-      >
-        {t.refreshStatus}
-      </button>
-      {error && error !== s.error && error !== s.operation?.error && (
-        <ErrorToast key={error} closeLabel={t.close}>
-          <p role="alert" className="error-text">
-            {error}
-          </p>
-        </ErrorToast>
-      )}
+      {error &&
+        current?.value?.funding?.state !== "failed" &&
+        error !== s.error &&
+        error !== s.operation?.error && (
+          <ErrorToast key={error} closeLabel={t.close}>
+            <p role="alert" className="error-text">
+              {error}
+            </p>
+          </ErrorToast>
+        )}
     </div>
   );
 }

@@ -115,7 +115,7 @@ Widget 默认内置 3 USDC 充值流程。可选回调让宿主覆盖充值或�
 
 回调中的 `yourProjectOnboarding` 和 `yourGasFundingFlow` 是接入方自己的实现，不是本包提供的服务。Widget 不处理登录 token、不接收项目私钥。默认情况下，创建账户会通过 `GET /api/v1/gas-top-ups?user_eoa=…` 查询当前 owner 的记录；需存在 `requested_usdc_amount_raw="3000000"`、`phase="success"`、`terminal=true` 的单笔记录，并且链上余额至少 0.01 HYPE。回调返回后重新检查两项条件，不以回调成功作为充值凭据。授权未生效仍会阻止借款。
 
-默认按网络使用 `https://protocol-service.leveracc.xyz` 或 `https://protocol-service-testnet.leveracc.xyz`，可通过 `config.protocolServiceUrl` 覆盖。服务需允许宿主页的跨域读取。历史检测不依赖 localStorage，不限制记录时间或来源链，不累计多笔金额。默认配置下，查询失败时阻止充值及创建，可通过“刷新状态”重试（避免重叠请求）；点击充值和提交创建前再次复查。
+默认按网络使用 `https://protocol-service.leveracc.xyz` 或 `https://protocol-service-testnet.leveracc.xyz`，可通过 `config.protocolServiceUrl` 覆盖。服务需允许宿主页跨域读取。历史资格来自服务端记录，不限制记录时间或来源链，不累计多笔付款。弹窗每 5 秒自动重试未满足的开户条件，避免重叠请求，无需“刷新状态”按钮。充值和开户前再次检查条件。
 
 项目方可在 React 或嵌入式入口的 `config` 中设置以下配置（默认 `false`，仅接受布尔值）：
 
@@ -128,15 +128,15 @@ const config = {
 } as const;
 ```
 
-开启后，不请求付款历史，直接检测当前网络 HyperEVM 上 Fund wallet（owner EOA）的实时 HYPE 余额。达到 0.01 HYPE 即满足创建的资金条件，即使付款历史服务不可用也可创建；余额不足或 RPC 读取失败仍会阻止创建。提交创建前重新检查，配置或钱包变化会使旧请求结果失效。余额不足时保留内置 3 USDC 充值和 `onGasTopUp`，内置充值仍需要服务端充值路由配置；余额足够时跳过充值及回调。此配置不会将账户标记为已激活，项目方负责后续激活检测；签名、账户归属、项目绑定及后续操作的现有校验保持不变。
+开启后，没有待处理内置付款时不请求付款历史，直接检测当前网络 HyperEVM 上 Fund wallet（owner EOA）的实时 HYPE 余额。达到 0.01 HYPE 即满足创建的资金条件，即使付款历史服务不可用也可创建；余额不足或 RPC 读取失败仍会阻止创建。提交创建前重新检查，配置或钱包变化会使旧请求结果失效。余额不足时保留内置 3 USDC 充值和 `onGasTopUp`，内置充值仍需要服务端充值路由配置；余额足够时跳过充值及回调。此配置不会将账户标记为已激活，项目方负责后续激活检测；签名、账户归属、项目绑定及后续操作的现有校验保持不变。
 
 未配置 `onGasTopUp` 时：
 
 - 主网读取 `/api/v1/gas-top-ups/config` 的 Arbitrum 路由，校验 chain ID 42161、原生 USDC 地址、收款地址和金额限额；切换主钱包至 Arbitrum，检查 3 USDC 和 ETH 余额，模拟并提交 USDC `transfer`。
 - 测试网向配置中的 `system_core_account_address` 发送 3 USDC，来源与目标均为 HyperCore Spot，使用现有 owner 签名与切链校验。
-- 返回交易 hash 或 Core 提交成功后发出 `operationSubmitted`（`action: "gasFunding"`），立即释放提交锁，不缓存、不等待回执或 HYPE 到账，不恢复旧交易。
-- 拒绝、请求失败和结果未知均释放提交锁，允许手动重试，不自动重发。服务端历史 pending 或失败记录不锁定后续操作；创建账户仍要求足够 HYPE，且未跳过历史校验时仍要求成功充值资格。
-- 浏览器存储不可用也能付款。成功充值资格仍来自服务端记录；只有开启 `skipCreationTopUpCheck` 时，直接转入 HYPE 才能替代成功的 3 USDC 充值记录要求。
+- 返回交易 hash 或 Core 确认提交后发出 `operationSubmitted`（`action: "gasFunding"`）。保存待处理付款，自动核实来源转账、匹配的服务记录、发放回执及 HYPE 余额；重开或刷新后恢复。采用服务端轮询间隔，默认 5 秒。
+- 明确拒签可重试。结果未知或待处理转账禁止重复付款；临时查询错误自动重试。后台终态失败保持付款锁定并显示原因。来源交易明确回滚后清除待处理记录。
+- 广播前必须能够使用浏览器存储，以便恢复待处理转账。本地记录不构成资格证明；仅开启 `skipCreationTopUpCheck` 时，直接转入 HYPE 才能替代历史 3 USDC 记录要求。已有待处理内置付款仍查询服务端记录以跟踪状态。
 
 配置 `onGasTopUp` 后使用宿主流程，仍执行服务端与 gas 复查。除非开启 `skipCreationTopUpCheck`，否则宿主流程需生成兼容的充值记录；开启后仅检查 gas 余额。
 

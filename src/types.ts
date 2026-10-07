@@ -143,6 +143,9 @@ export interface Balances {
   borrowable: bigint;
 }
 export interface Snapshot {
+  /** Account creation is submitted and still awaiting verification. */
+  creationPending?: boolean;
+  creationFundingPending?: boolean;
   status: "disconnected" | "loading" | "noAccount" | "ready" | "readError";
   owner?: Address;
   account?: Address;

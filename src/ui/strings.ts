@@ -44,6 +44,9 @@ export const en = {
   gasFundingSign: "Sign & Swap {amount} USDC for Gas",
   gasFundingInfo:
     "Your {amount} USDC transfer is processed by the Gas Station and HYPE is returned to your wallet.",
+  gasFundingPending: "Waiting for HYPE to arrive. Do not send again.",
+  creationPending:
+    "Creating your trading account. Waiting for on-chain confirmation…",
   gasFundingSigning: "Confirming your {source} USDC transfer...",
   tradingAccount: "Trading Account",
   gasRequired:
@@ -207,6 +210,8 @@ export const zh: Record<TextKey, string> = {
   gasFundingSign: "签名并兑换 {amount} USDC 获取 Gas",
   gasFundingInfo:
     "你的 {amount} USDC 转账将由 Gas Station 处理，HYPE 会返回你的钱包。",
+  gasFundingPending: "正在等待 HYPE 到账，请勿重复转账。",
+  creationPending: "正在创建交易账户，等待链上确认…",
   gasFundingSigning: "正在确认 {source} USDC 转账…",
   tradingAccount: "交易账户",
   gasRequired:

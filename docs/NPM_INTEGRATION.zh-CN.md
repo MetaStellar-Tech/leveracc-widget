@@ -151,6 +151,6 @@ Nuxt 中放在客户端组件或 `ClientOnly` 内，并在 `onMounted` 中动态
 - 将旧 `operationSuccess` 处理迁移到 `operationSubmitted`（`stage: "submitted"`）。它只表示已发出，不表示链上执行或到账成功；`action` 可为 `bridgeApproval` 或 `gasFunding`。旧事件类型已弃用，不再发送。
 - React invalid hook call：检查 React 与 ReactDOM 版本一致，避免宿主打包重复 React。React 页面使用根入口。
 - 找不到模块：检查版本已发布、scope 拼写、registry 设置及导出路径。首次发布前使用 `npm install /path/to/leveracc-widget-0.1.0.tgz`。
-- 创建／借款受阻：检查 projectId、网络、授权、成功充值资格和真实 HYPE 余额。查看 `error` 和 `accountActionRequired`，通过刷新重试查询。交易不缓存、不恢复，失败不保留提交锁；结果未知时可先在钱包中核实再重试。
+- 创建／借款受阻：检查 projectId、网络、授权、充值资格和真实 HYPE。查看 `error` 和 `accountActionRequired`。开户自动重试状态查询，刷新后恢复待处理充值及开户，并在结果未知时禁止重复提交；其他交易保持原有重试行为。
 
 完整配置和事件说明见 [README](../README.zh-CN.md)。升级前查看发布说明，先在测试环境验证；可用 `npm install @leveracc/widget@<version>` 固定版本，预发布通过 `@next` 安装。

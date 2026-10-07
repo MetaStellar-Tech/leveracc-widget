@@ -548,7 +548,7 @@ test("connected owner completes creation, deposit, lending and both account tran
       { timeout: 20000 },
     )
     .toBe(3);
-  expect(receiptQueries).toEqual([]);
+  expect(receiptQueries).toEqual(["https://api.example.test/rpc"]);
 });
 
 test("static account card and accessible collateral breakdown", async ({
@@ -781,7 +781,7 @@ test("gas alone cannot unlock account creation", async ({ page }) => {
 });
 
 for (const mainnet of [true, false]) {
-  test(`built-in ${mainnet ? "Arbitrum" : "HyperCore"} 3 USDC funding is not restored and creation checks live eligibility`, async ({
+  test(`built-in ${mainnet ? "Arbitrum" : "HyperCore"} 3 USDC funding resumes automatically and creation waits for confirmation`, async ({
     page,
   }) => {
     const options = {
@@ -837,13 +837,18 @@ for (const mainnet of [true, false]) {
     await page
       .getByRole("button", { name: "Create Trading Account", exact: true })
       .click();
-    await expect(page.locator(".operation")).toHaveCount(0);
+    await expect(
+      page.getByText("Waiting for HYPE to arrive. Do not send again."),
+    ).toBeVisible();
     await expect(
       page.getByRole("button", {
         name: "Sign & Swap 3 USDC for Gas",
         exact: true,
       }),
-    ).toBeEnabled();
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Refresh status", exact: true }),
+    ).toHaveCount(0);
     expect(
       await page.evaluate(() =>
         (window as any).requests.filter(
@@ -852,9 +857,6 @@ for (const mainnet of [true, false]) {
       ),
     ).toHaveLength(0);
     await page.evaluate(() => (window as any).__completeGasFunding());
-    await page
-      .getByRole("button", { name: "Refresh status", exact: true })
-      .click();
     await expect(
       page.getByRole("button", { name: "Sign & Create Account", exact: true }),
     ).toBeEnabled({ timeout: 25000 });
@@ -911,3 +913,47 @@ for (const mainnet of [true, false]) {
     expect(historyRequests).toEqual([]);
   });
 }
+
+test("creation waits for its receipt across reload without sending again", async ({
+  page,
+}) => {
+  const options = { noAccount: true, delayedCreationReceipt: true };
+  await mountMockWidget(page, "en", options);
+  await page
+    .getByRole("button", { name: "Create Trading Account", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Sign & Create Account", exact: true })
+    .click();
+  await expect(
+    page.getByText(
+      "Creating your trading account. Waiting for on-chain confirmation…",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Done", exact: true }),
+  ).toHaveCount(0);
+  await mountMockWidget(page, "en", options, true);
+  await page
+    .getByRole("button", { name: "Create Trading Account", exact: true })
+    .click();
+  await expect(
+    page.getByText(
+      "Creating your trading account. Waiting for on-chain confirmation…",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign & Create Account", exact: true }),
+  ).toHaveCount(0);
+  await page.evaluate(() => (window as any).__completeCreation());
+  await expect(
+    page.getByRole("button", { name: "Done", exact: true }),
+  ).toBeVisible({ timeout: 15000 });
+  expect(
+    await page.evaluate(() =>
+      (window as any).requests.filter(
+        (r: any) => r.method === "eth_sendTransaction",
+      ),
+    ),
+  ).toHaveLength(0);
+});

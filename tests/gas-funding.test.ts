@@ -1,3 +1,9 @@
+import {
+  creationKey,
+  loadCreation,
+  fundingStatus,
+  clearCreation,
+} from "../src/protocol/creation-tracking";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { encodeEventTopics, encodeAbiParameters, type Address } from "viem";
 import { resolveConfig } from "../src/core/config";
@@ -145,7 +151,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
 });
-it("sends exactly 3 native Arbitrum USDC and returns without receipts or storage", async () => {
+it("sends exactly 3 native Arbitrum USDC and persists the transfer before tracking", async () => {
   await start();
   expect(m.signer).toHaveBeenCalledWith(
     provider,
@@ -160,7 +166,11 @@ it("sends exactly 3 native Arbitrum USDC and returns without receipts or storage
       args: [receiver, 3_000_000n],
     }),
   );
-  expect(localStorage.length).toBe(0);
+  expect(loadCreation(creationKey(config, owner))).toMatchObject({
+    hash,
+    receiver,
+    hypeBefore: "0",
+  });
   expect(m.receipt).not.toHaveBeenCalled();
   expect(m.write).toHaveBeenCalledOnce();
 });
@@ -190,28 +200,23 @@ it.each(["balance", "eth", "route", "rpc", "owner"])(
     expect(localStorage.length).toBe(0);
   },
 );
-it("submits with denied storage", async () => {
+it("blocks broadcast when pending storage is unavailable", async () => {
   vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
     throw Error("storage blocked");
   });
-  await expect(start()).resolves.toEqual({ source: "arbitrum", hash });
+  await expect(start()).rejects.toThrow("storage blocked");
+  expect(m.write).not.toHaveBeenCalled();
 });
-it("allows explicit retry after an ambiguous request failure or wallet rejection", async () => {
+it("blocks a second payment after an unknown submission", async () => {
   m.write.mockRejectedValueOnce(Error("RPC disconnected"));
-  await expect(withGasFundingLock(key, () => start())).rejects.toThrow(
-    "disconnected",
-  );
-  await expect(withGasFundingLock(key, () => start())).resolves.toMatchObject({
-    hash,
-  });
+  await expect(start()).rejects.toThrow("disconnected");
+  await expect(start()).rejects.toMatchObject({ code: "FUNDING_PENDING" });
+  expect(m.write).toHaveBeenCalledOnce();
+});
+it("allows a new attempt after explicit wallet rejection", async () => {
   m.write.mockRejectedValueOnce({ code: 4001 });
-  await expect(withGasFundingLock(key, () => start())).rejects.toMatchObject({
-    code: 4001,
-  });
-  await expect(withGasFundingLock(key, () => start())).resolves.toMatchObject({
-    hash,
-  });
-  expect(localStorage.length).toBe(0);
+  await expect(start()).rejects.toMatchObject({ code: 4001 });
+  await expect(start()).resolves.toMatchObject({ hash });
 });
 it("returns the hash even if the wallet context changes during broadcast", async () => {
   let current = true;
@@ -236,7 +241,7 @@ it.each(["processing", "failed"])(
     expect(m.receipt).not.toHaveBeenCalled();
   },
 );
-it("submits testnet Core funding without tracking arrival", async () => {
+it("persists testnet Core funding for arrival tracking", async () => {
   await expect(
     startGasFunding(
       testnet,
@@ -256,7 +261,7 @@ it("submits testnet Core funding without tracking arrival", async () => {
   expect(m.core).toHaveBeenCalledWith(receiver, "3");
   expect(m.write).not.toHaveBeenCalled();
   expect(m.receipt).not.toHaveBeenCalled();
-  expect(localStorage.length).toBe(0);
+  expect(loadCreation(creationKey(testnet, owner))?.source).toBe("core");
 });
 it("does not use a malformed receiver or a different Arbitrum token", async () => {
   (service.arbitrum as Record<string, unknown>).usdc_address = receiver;
@@ -322,3 +327,77 @@ it.each([config, testnet])(
     expect(m.core).not.toHaveBeenCalled();
   },
 );
+
+it("restores a submitted payment and waits for service completion and HYPE", async () => {
+  await start();
+  await expect(start()).rejects.toMatchObject({ code: "FUNDING_PENDING" });
+  expect((await fundingStatus(config, owner, 0n, [])).state).toBe("pending");
+  const processing = {
+    ...record,
+    phase: "processing",
+    terminal: false,
+    next_poll_after_seconds: 8,
+  };
+  status = processing;
+  expect(await fundingStatus(config, owner, 0n, [processing])).toMatchObject({
+    state: "pending",
+    pollAfter: 8000,
+  });
+  status = record;
+  expect((await fundingStatus(config, owner, 0n, [record])).state).toBe(
+    "pending",
+  );
+  expect(
+    (await fundingStatus(config, owner, 10000000000000000n, [record])).state,
+  ).toBe("idle");
+  expect(loadCreation(creationKey(config, owner))).toBeUndefined();
+  expect(m.write).toHaveBeenCalledOnce();
+});
+it("keeps a payment locked across RPC errors and terminal service failure", async () => {
+  await start();
+  m.receipt.mockRejectedValueOnce(Error("RPC offline"));
+  await expect(fundingStatus(config, owner, 0n, [record])).rejects.toThrow(
+    "RPC offline",
+  );
+  await expect(start()).rejects.toMatchObject({ code: "FUNDING_PENDING" });
+  status = { ...record, phase: "failed", status_message: "Contact support" };
+  expect(await fundingStatus(config, owner, 0n, [record])).toMatchObject({
+    state: "failed",
+    error: "Contact support",
+  });
+  await expect(start()).rejects.toMatchObject({ code: "FUNDING_PENDING" });
+});
+it("rejects mismatched transfer logs and service records", async () => {
+  await start();
+  const receipt = await m.receipt({ hash });
+  m.receipt.mockResolvedValueOnce({ ...receipt, logs: [] });
+  await expect(
+    fundingStatus(config, owner, 1n, [record]),
+  ).rejects.toMatchObject({ code: "FUNDING_MISMATCH" });
+  status = { ...record, source_tx_hash: targetHash };
+  await expect(
+    fundingStatus(config, owner, 1n, [record]),
+  ).rejects.toMatchObject({ code: "FUNDING_MISMATCH" });
+});
+it("allows retry only after an explicitly reverted funding transaction", async () => {
+  await start();
+  m.receipt.mockResolvedValueOnce({ status: "reverted" });
+  expect((await fundingStatus(config, owner, 0n, [])).state).toBe("idle");
+  await expect(start()).resolves.toMatchObject({ hash });
+});
+
+it("retains a returned hash when storage fails after broadcast", async () => {
+  const original = Storage.prototype.setItem;
+  let writes = 0;
+  const spy = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(function (this: Storage, k, v) {
+      if (++writes > 1) throw Error("storage unavailable");
+      original.call(this, k, v);
+    });
+  await expect(start()).resolves.toMatchObject({ hash });
+  expect(loadCreation(creationKey(config, owner))?.hash).toBe(hash);
+  await expect(start()).rejects.toMatchObject({ code: "FUNDING_PENDING" });
+  spy.mockRestore();
+  clearCreation(creationKey(config, owner));
+});

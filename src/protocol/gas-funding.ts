@@ -1,3 +1,9 @@
+import {
+  creationKey,
+  loadCreation,
+  saveCreation,
+  clearCreation,
+} from "./creation-tracking";
 import { isAddress, zeroAddress, type Address, type Hex } from "viem";
 import { arbitrum } from "viem/chains";
 import { z } from "zod";
@@ -85,6 +91,12 @@ export async function startGasFunding(
   current: () => boolean,
   corePort: (submitting: () => void) => ProtocolPort,
 ) {
+  const key = creationKey(config, owner);
+  invariant(
+    !loadCreation(key),
+    "FUNDING_PENDING",
+    "Gas funding is already pending. Do not send again.",
+  );
   const [history, hypeBefore] = await Promise.all([
     config.skipCreationTopUpCheck
       ? []
@@ -100,6 +112,12 @@ export async function startGasFunding(
   let submitting = false;
   const markSubmitting = () => {
     invariant(current(), "CONTEXT_CHANGED", "Wallet context changed.");
+    saveCreation(key, {
+      source: route.source,
+      receiver: route.receiver,
+      hypeBefore: hypeBefore.toString(),
+      createdAt: Date.now(),
+    });
     submitting = true;
   };
   try {
@@ -167,10 +185,22 @@ export async function startGasFunding(
         chain: arbitrum,
         gas: (gas * 120n) / 100n,
       });
+      saveCreation(
+        key,
+        {
+          source: route.source,
+          hash,
+          receiver: route.receiver,
+          hypeBefore: hypeBefore.toString(),
+          createdAt: Date.now(),
+        },
+        true,
+      );
       return { source: route.source, hash };
     }
   } catch (error) {
     const normalized = normalizeError(error);
+    if (submitting && normalized.code === "USER_REJECTED") clearCreation(key);
     if (submitting && normalized.code !== "USER_REJECTED") {
       normalized.message +=
         " Submission result is unknown. Check your wallet before retrying.";

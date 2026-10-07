@@ -6,21 +6,31 @@ export function CreationGasStep({
   t,
   disabled,
   submitting,
+  pending = false,
+  failure,
   onFund,
 }: {
   source: "Arbitrum" | "HyperCore";
   t: typeof en;
   disabled: boolean;
   submitting: boolean;
+  pending?: boolean;
+  failure?: string;
   onFund: () => void;
 }) {
   const text = (value: string) =>
     value.replaceAll("{amount}", "3").replaceAll("{source}", source);
-  if (submitting)
+  if (failure)
+    return (
+      <p role="alert" className="error-text">
+        {failure}
+      </p>
+    );
+  if (submitting || pending)
     return (
       <div className="creation-gas-progress" role="status">
         <span className="loader" />
-        <p>{text(t.gasFundingSigning)}</p>
+        <p>{text(submitting ? t.gasFundingSigning : t.gasFundingPending)}</p>
       </div>
     );
   return (
