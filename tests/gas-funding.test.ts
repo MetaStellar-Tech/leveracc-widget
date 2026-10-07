@@ -282,3 +282,43 @@ it("shares a funding lock across widgets and isolates storage by owner and netwo
   release();
   await first;
 });
+
+it.each([config, testnet])(
+  "funds without history in opt-out mode on $network",
+  async (preset) => {
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      if (!String(url).endsWith("/config")) throw Error("History unavailable");
+      return new Response(JSON.stringify({ data: service }));
+    });
+    const corePort = { ...port, sendCore: m.core };
+    await startGasFunding(
+      { ...preset, skipCreationTopUpCheck: true },
+      provider,
+      owner,
+      port,
+      () => true,
+      () => corePort,
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(
+      preset.network === "mainnet" ? m.write : m.core,
+    ).toHaveBeenCalledOnce();
+  },
+);
+it.each([config, testnet])(
+  "skips all funding service requests when HYPE is sufficient on $network",
+  async (preset) => {
+    vi.mocked(fetch).mockRejectedValue(new Error("Service unavailable"));
+    await startGasFunding(
+      { ...preset, skipCreationTopUpCheck: true },
+      provider,
+      owner,
+      { ...port, nativeBalance: async () => 10000000000000000n },
+      () => true,
+      () => port,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(m.write).not.toHaveBeenCalled();
+    expect(m.core).not.toHaveBeenCalled();
+  },
+);

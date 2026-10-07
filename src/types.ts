@@ -43,6 +43,8 @@ export interface WidgetConfig {
   arbitrumRpcUrl?: string;
   /** Protocol Service used to verify successful 3 USDC gas top-ups. */
   protocolServiceUrl?: string;
+  /** Skip creation payment history checks; still requires at least 0.01 HYPE. Defaults to false. */
+  skipCreationTopUpCheck?: boolean;
   locale?: "en" | "zh";
   theme?: "light" | "dark";
   primaryColor?: string;
@@ -128,7 +130,7 @@ export interface WidgetOptions {
       reasons: string[];
     },
   ) => Promise<void>;
-  /** Optional override for built-in 3 USDC gas funding. Completion is verified through Protocol Service and chain balances. */
+  /** Optional override for built-in 3 USDC gas funding. Completion requires sufficient HYPE and, unless skipCreationTopUpCheck is enabled, Protocol Service payment history. */
   onGasTopUp?: (context: EventContext & { owner: Address }) => Promise<void>;
   onEvent?: (event: WidgetEvent) => void;
 }

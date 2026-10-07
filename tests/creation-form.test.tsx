@@ -124,3 +124,26 @@ it("does not poll an unfunded account", async () => {
   });
   expect(check).toHaveBeenCalledTimes(1);
 });
+
+it("rechecks on opt-out changes and discards the old response", async () => {
+  c.config.skipCreationTopUpCheck = false;
+  let resolve!: (value: typeof ready) => void;
+  check
+    .mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    )
+    .mockResolvedValue({ ...ready, hasTopUp: false });
+  await render();
+  c.config.skipCreationTopUpCheck = true;
+  await render();
+  expect(createButton()?.disabled).toBe(false);
+  await act(async () => resolve({ ...ready, ready: false }));
+  expect(createButton()?.disabled).toBe(false);
+  c.config.skipCreationTopUpCheck = false;
+  check.mockResolvedValue({ ...ready, hasTopUp: false, ready: false });
+  await render();
+  expect(createButton()).toBeUndefined();
+});

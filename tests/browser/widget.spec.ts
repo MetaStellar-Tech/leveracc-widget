@@ -866,3 +866,48 @@ for (const mainnet of [true, false]) {
     ).toBeVisible();
   });
 }
+
+for (const mainnet of [true, false]) {
+  test(`creation history opt-out works with unavailable history on ${mainnet ? "mainnet" : "testnet"}`, async ({
+    page,
+  }) => {
+    const historyRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/gas-top-ups?"))
+        historyRequests.push(request.url());
+    });
+    await mountMockWidget(page, "en", {
+      mainnet,
+      noAccount: true,
+      noTopUp: true,
+      topUpError: true,
+      skipCreationTopUpCheck: true,
+    });
+    await page
+      .getByRole("button", { name: "Create Trading Account", exact: true })
+      .click();
+    const create = page.getByRole("button", {
+      name: "Sign & Create Account",
+      exact: true,
+    });
+    await expect(create).toBeEnabled();
+    await expect(
+      page.getByRole("button", {
+        name: "Sign & Swap 3 USDC for Gas",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await create.click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as any).events.some(
+            (e: any) =>
+              e.type === "operationSubmitted" && e.action === "createAccount",
+          ),
+        ),
+      )
+      .toBe(true);
+    expect(historyRequests).toEqual([]);
+  });
+}

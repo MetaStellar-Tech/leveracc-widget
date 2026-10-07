@@ -85,13 +85,18 @@ export async function startGasFunding(
   current: () => boolean,
   corePort: (submitting: () => void) => ProtocolPort,
 ) {
-  const [route, history, hypeBefore] = await Promise.all([
-    gasFundingRoute(config),
-    listGasTopUps(config.protocolServiceUrl, owner),
+  const [history, hypeBefore] = await Promise.all([
+    config.skipCreationTopUpCheck
+      ? []
+      : listGasTopUps(config.protocolServiceUrl, owner),
     port.nativeBalance(owner),
   ]);
-  if (history.some(isCreationTopUp) && hypeBefore >= CREATION_GAS_MINIMUM)
+  if (
+    (config.skipCreationTopUpCheck || history.some(isCreationTopUp)) &&
+    hypeBefore >= CREATION_GAS_MINIMUM
+  )
     return;
+  const route = await gasFundingRoute(config);
   let submitting = false;
   const markSubmitting = () => {
     invariant(current(), "CONTEXT_CHANGED", "Wallet context changed.");

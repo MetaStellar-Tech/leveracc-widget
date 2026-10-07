@@ -309,7 +309,8 @@ export class WidgetController {
       resolved.network !== this.config.network ||
       resolved.rpcUrl !== this.config.rpcUrl ||
       resolved.arbitrumRpcUrl !== this.config.arbitrumRpcUrl ||
-      resolved.protocolServiceUrl !== this.config.protocolServiceUrl;
+      resolved.protocolServiceUrl !== this.config.protocolServiceUrl ||
+      resolved.skipCreationTopUpCheck !== this.config.skipCreationTopUpCheck;
     this.detach();
     this.options = next;
     this.config = resolved;
@@ -720,7 +721,9 @@ export class WidgetController {
     invariant(owner, "WALLET_NOT_CONNECTED", "Connect a wallet first.");
     const [gas, records] = await Promise.all([
       this.port(config, owner, undefined, generation).nativeBalance(owner),
-      listGasTopUps(config.protocolServiceUrl, owner),
+      config.skipCreationTopUpCheck
+        ? []
+        : listGasTopUps(config.protocolServiceUrl, owner),
     ]);
     invariant(
       generation === this.generation &&
@@ -738,14 +741,16 @@ export class WidgetController {
       gas,
       hasTopUp,
       funding,
-      ready: hasTopUp && gas >= CREATION_GAS_MINIMUM,
+      ready:
+        (config.skipCreationTopUpCheck || hasTopUp) &&
+        gas >= CREATION_GAS_MINIMUM,
     };
   }
   createAccount = () =>
     this.run("createAccount", async (port, config, owner) => {
       const readiness = await this.creationReadiness();
       invariant(
-        readiness.hasTopUp,
+        config.skipCreationTopUpCheck || readiness.hasTopUp,
         "CREATION_TOP_UP_REQUIRED",
         "A successful 3 USDC gas top-up is required before creating the account.",
       );

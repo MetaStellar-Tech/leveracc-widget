@@ -113,19 +113,32 @@ Widget 默认内置 3 USDC 充值流程。可选回调让宿主覆盖充值或�
 />
 ```
 
-回调中的 `yourProjectOnboarding` 和 `yourGasFundingFlow` 是接入方自己的实现，不是本包提供的服务。Widget 不处理登录 token、不接收项目私钥。创建账户会通过 `GET /api/v1/gas-top-ups?user_eoa=…` 查询当前 owner 的记录；需存在 `requested_usdc_amount_raw="3000000"`、`phase="success"`、`terminal=true` 的单笔记录，并且链上余额至少 0.01 HYPE。回调返回后重新检查两项条件，不以回调成功作为充值凭据。授权未生效仍会阻止借款。
+回调中的 `yourProjectOnboarding` 和 `yourGasFundingFlow` 是接入方自己的实现，不是本包提供的服务。Widget 不处理登录 token、不接收项目私钥。默认情况下，创建账户会通过 `GET /api/v1/gas-top-ups?user_eoa=…` 查询当前 owner 的记录；需存在 `requested_usdc_amount_raw="3000000"`、`phase="success"`、`terminal=true` 的单笔记录，并且链上余额至少 0.01 HYPE。回调返回后重新检查两项条件，不以回调成功作为充值凭据。授权未生效仍会阻止借款。
 
-默认按网络使用 `https://protocol-service.leveracc.xyz` 或 `https://protocol-service-testnet.leveracc.xyz`，可通过 `config.protocolServiceUrl` 覆盖。服务需允许宿主页的跨域读取。历史检测不依赖 localStorage，不限制记录时间或来源链，不累计多笔金额。查询失败时阻止充值及创建，可通过“刷新状态”重试（避免重叠请求）；点击充值和提交创建前再次复查。
+默认按网络使用 `https://protocol-service.leveracc.xyz` 或 `https://protocol-service-testnet.leveracc.xyz`，可通过 `config.protocolServiceUrl` 覆盖。服务需允许宿主页的跨域读取。历史检测不依赖 localStorage，不限制记录时间或来源链，不累计多笔金额。默认配置下，查询失败时阻止充值及创建，可通过“刷新状态”重试（避免重叠请求）；点击充值和提交创建前再次复查。
+
+项目方可在 React 或嵌入式入口的 `config` 中设置以下配置（默认 `false`，仅接受布尔值）：
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "zh",
+  skipCreationTopUpCheck: true,
+} as const;
+```
+
+开启后，不请求付款历史，直接检测当前网络 HyperEVM 上 Fund wallet（owner EOA）的实时 HYPE 余额。达到 0.01 HYPE 即满足创建的资金条件，即使付款历史服务不可用也可创建；余额不足或 RPC 读取失败仍会阻止创建。提交创建前重新检查，配置或钱包变化会使旧请求结果失效。余额不足时保留内置 3 USDC 充值和 `onGasTopUp`，内置充值仍需要服务端充值路由配置；余额足够时跳过充值及回调。此配置不会将账户标记为已激活，项目方负责后续激活检测；签名、账户归属、项目绑定及后续操作的现有校验保持不变。
 
 未配置 `onGasTopUp` 时：
 
 - 主网读取 `/api/v1/gas-top-ups/config` 的 Arbitrum 路由，校验 chain ID 42161、原生 USDC 地址、收款地址和金额限额；切换主钱包至 Arbitrum，检查 3 USDC 和 ETH 余额，模拟并提交 USDC `transfer`。
 - 测试网向配置中的 `system_core_account_address` 发送 3 USDC，来源与目标均为 HyperCore Spot，使用现有 owner 签名与切链校验。
 - 返回交易 hash 或 Core 提交成功后发出 `operationSubmitted`（`action: "gasFunding"`），立即释放提交锁，不缓存、不等待回执或 HYPE 到账，不恢复旧交易。
-- 拒绝、请求失败和结果未知均释放提交锁，允许手动重试，不自动重发。服务端历史 pending 或失败记录不锁定后续操作；创建账户仍要求成功充值资格及足够 HYPE。
-- 浏览器存储不可用也能付款。成功充值资格仍来自服务端记录；直接转入 HYPE 不能替代成功的 3 USDC 充值记录。
+- 拒绝、请求失败和结果未知均释放提交锁，允许手动重试，不自动重发。服务端历史 pending 或失败记录不锁定后续操作；创建账户仍要求足够 HYPE，且未跳过历史校验时仍要求成功充值资格。
+- 浏览器存储不可用也能付款。成功充值资格仍来自服务端记录；只有开启 `skipCreationTopUpCheck` 时，直接转入 HYPE 才能替代成功的 3 USDC 充值记录要求。
 
-配置 `onGasTopUp` 后使用宿主流程，仍执行服务端与 gas 复查。宿主流程需生成兼容的充值记录。
+配置 `onGasTopUp` 后使用宿主流程，仍执行服务端与 gas 复查。除非开启 `skipCreationTopUpCheck`，否则宿主流程需生成兼容的充值记录；开启后仅检查 gas 余额。
 
 ## 验证范围
 

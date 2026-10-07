@@ -849,3 +849,81 @@ it("Arbitrum continuation replenishes accrued interest even after the Core recei
   ).rejects.toMatchObject({ code: "WITHDRAW_RESTRICTED" });
   expect(port.write).not.toHaveBeenCalled();
 });
+
+describe("creation payment history opt-out", () => {
+  async function setup() {
+    created = false;
+    const { c } = make();
+    c.update({ config: { ...config, skipCreationTopUpCheck: true } });
+    await c.connect();
+    return c;
+  }
+  it.each([10000000000000000n, 10000000000000001n])(
+    "creates without history at balance %s",
+    async (balance) => {
+      const c = await setup();
+      mock.gas.mockResolvedValue(balance);
+      expect(await c.creationReadiness()).toMatchObject({
+        ready: true,
+        hasTopUp: false,
+      });
+      await c.topUpGas();
+      const callback = vi.fn();
+      c.update({ onGasTopUp: callback });
+      await c.topUpGas();
+      expect(callback).not.toHaveBeenCalled();
+      await c.createAccount();
+      expect(mock.write).toHaveBeenCalledOnce();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+  it("rechecks a falling balance and allows host replenishment", async () => {
+    const c = await setup();
+    expect((await c.creationReadiness()).ready).toBe(true);
+    mock.gas.mockResolvedValue(9999999999999999n);
+    await c.createAccount();
+    expect(mock.write).not.toHaveBeenCalled();
+    expect(c.getSnapshot().operation?.error).toContain("0.01 HYPE");
+    const callback = vi.fn(async () => {
+      mock.gas.mockResolvedValue(10000000000000000n);
+    });
+    c.update({ onGasTopUp: callback });
+    await c.topUpGas();
+    expect(callback).toHaveBeenCalledOnce();
+    await c.createAccount();
+    expect(mock.write).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("blocks when the gas RPC fails", async () => {
+    const c = await setup();
+    mock.gas.mockRejectedValue(new Error("RPC unavailable"));
+    await c.createAccount();
+    expect(mock.write).not.toHaveBeenCalled();
+    expect(c.getSnapshot().operation?.error).toContain("RPC unavailable");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(["config", "wallet"])(
+    "rejects stale gas reads after %s changes",
+    async (kind) => {
+      const c = await setup();
+      let resolve!: (value: bigint) => void;
+      mock.gas.mockImplementationOnce(
+        () =>
+          new Promise<bigint>((r) => {
+            resolve = r;
+          }),
+      );
+      const pending = c.creationReadiness();
+      if (kind === "config")
+        c.update({ config: { ...config, skipCreationTopUpCheck: false } });
+      else listeners.accountsChanged();
+      resolve(10000000000000000n);
+      await expect(pending).rejects.toThrow("context changed");
+      await c.connect();
+      if (kind === "config") {
+        history([]);
+        expect((await c.creationReadiness()).ready).toBe(false);
+      }
+    },
+  );
+});

@@ -76,3 +76,22 @@ it("defaults service by network and validates overrides", () => {
     resolveConfig({ ...config, protocolServiceUrl: "file:///tmp/service" }),
   ).toThrow();
 });
+
+it("validates and defaults the creation history opt-out", () => {
+  const config = {
+    network: "mainnet" as const,
+    projectId: `0x${"ab".repeat(32)}` as `0x${string}`,
+  };
+  expect(resolveConfig(config).skipCreationTopUpCheck).toBe(false);
+  for (const value of [true, false]) {
+    expect(
+      resolveConfig({ ...config, skipCreationTopUpCheck: value })
+        .skipCreationTopUpCheck,
+    ).toBe(value);
+  }
+  for (const value of [null, 1, "true", {}]) {
+    expect(() =>
+      resolveConfig({ ...config, skipCreationTopUpCheck: value as boolean }),
+    ).toThrow("must be a boolean");
+  }
+});

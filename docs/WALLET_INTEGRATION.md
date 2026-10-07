@@ -113,19 +113,32 @@ The widget includes a default 3 USDC top-up flow. Optional callbacks let the hos
 />
 ```
 
-`yourProjectOnboarding` and `yourGasFundingFlow` in the callbacks are the integrator's own implementations, not services provided by this package. The widget does not handle login tokens or accept project private keys. Account creation queries the current owner's records through `GET /api/v1/gas-top-ups?user_eoa=…`. It requires a single record with `requested_usdc_amount_raw="3000000"`, `phase="success"`, and `terminal=true`, plus an on-chain balance of at least 0.01 HYPE. Both conditions are checked again after the callback returns; callback success alone is not proof of funding. Borrowing remains blocked until authorization takes effect.
+`yourProjectOnboarding` and `yourGasFundingFlow` in the callbacks are the integrator's own implementations, not services provided by this package. The widget does not handle login tokens or accept project private keys. By default, account creation queries the current owner's records through `GET /api/v1/gas-top-ups?user_eoa=…`. It requires a single record with `requested_usdc_amount_raw="3000000"`, `phase="success"`, and `terminal=true`, plus an on-chain balance of at least 0.01 HYPE. Both conditions are checked again after the callback returns; callback success alone is not proof of funding. Borrowing remains blocked until authorization takes effect.
 
-Depending on the network, the default service is `https://protocol-service.leveracc.xyz` or `https://protocol-service-testnet.leveracc.xyz`; override it with `config.protocolServiceUrl`. The service must allow cross-origin reads from the host page. History detection does not depend on localStorage, restrict record age or source chain, or sum multiple payments. Failed queries block top-ups and account creation and can be retried with “Refresh status” without overlapping requests. The conditions are checked again before starting a top-up or submitting account creation.
+Depending on the network, the default service is `https://protocol-service.leveracc.xyz` or `https://protocol-service-testnet.leveracc.xyz`; override it with `config.protocolServiceUrl`. The service must allow cross-origin reads from the host page. History detection does not depend on localStorage, restrict record age or source chain, or sum multiple payments. With the default configuration, failed queries block top-ups and account creation and can be retried with “Refresh status” without overlapping requests. The conditions are checked again before starting a top-up or submitting account creation.
+
+Projects can set this option in `config` for React or embedded integrations (default `false`, boolean only):
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "en",
+  skipCreationTopUpCheck: true,
+} as const;
+```
+
+When enabled, the widget does not request payment history. It checks the live HYPE balance of the Fund wallet (owner EOA) on the current network’s HyperEVM. At least 0.01 HYPE satisfies the creation funding requirement even when the history service is unavailable; insufficient gas or failed RPC reads still block creation. Creation rechecks the balance before submission, and configuration or wallet changes invalidate old requests. Built-in 3 USDC funding and `onGasTopUp` remain available for insufficient gas; built-in funding still requires service route configuration. Sufficient gas skips funding and the callback. This option does not mark the account as activated: the project handles subsequent activation checks. Existing signature, ownership, project binding, and subsequent operation checks remain unchanged.
 
 When `onGasTopUp` is not configured:
 
 - On mainnet, read the Arbitrum route from `/api/v1/gas-top-ups/config` and validate chain ID 42161, the native USDC address, recipient, and amount limits. Switch the main wallet to Arbitrum, check the 3 USDC and ETH balances, then simulate and submit a USDC `transfer`.
 - On testnet, send 3 USDC to the configured `system_core_account_address`. Both source and destination are HyperCore Spot, using the existing owner signing and chain-switch validation.
 - A returned hash or successful Core submission emits `operationSubmitted` (`action: "gasFunding"`) and immediately releases the submission lock. There is no transaction cache, receipt / HYPE arrival wait, or restoration of old transactions.
-- Rejection, request failure, and unknown outcomes release the submission lock for manual retry without automatic resubmission. Historical pending or failed service records do not lock subsequent actions; account creation still requires successful funding eligibility and enough HYPE.
-- Payments work without browser storage. Successful funding eligibility still comes from service records; direct HYPE transfers do not replace a successful 3 USDC record.
+- Rejection, request failure, and unknown outcomes release the submission lock for manual retry without automatic resubmission. Historical pending or failed service records do not lock subsequent actions; account creation still requires enough HYPE and, unless the history check is skipped, successful funding eligibility.
+- Payments work without browser storage. Successful funding eligibility still comes from service records; direct HYPE transfers replace the 3 USDC record requirement only when `skipCreationTopUpCheck` is enabled.
 
-When `onGasTopUp` is configured, the host flow is used, followed by the same service and gas checks. The host flow must generate compatible top-up records.
+When `onGasTopUp` is configured, the host flow is used, followed by the same service and gas checks. The host flow must generate compatible top-up records unless `skipCreationTopUpCheck` is enabled; in that mode only the gas balance is checked.
 
 ## Verification coverage
 

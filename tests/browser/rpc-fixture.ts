@@ -43,6 +43,7 @@ export async function mockBackend(
     readError?: boolean;
     lowGas?: boolean;
     noTopUp?: boolean;
+    skipCreationTopUpCheck?: boolean;
     topUpError?: boolean;
     gasFunding?: boolean;
     unauthorized?: boolean;
@@ -495,7 +496,15 @@ export async function mountMockWidget(
   await page.addScriptTag({ url: "/dist/widget.js" });
   if (!restoreBackend) await mockBackend(page, options);
   await page.evaluate(
-    ({ owner, projectId, hash, locale, hostPrompt, mainnet }) => {
+    ({
+      owner,
+      projectId,
+      hash,
+      locale,
+      hostPrompt,
+      mainnet,
+      skipCreationTopUpCheck,
+    }) => {
       document.body.innerHTML =
         '<main style="display:block;max-width:480px;margin:20px auto;padding:12px"><div id="test-widget"></div></main>';
       (window as any).events = [];
@@ -555,6 +564,7 @@ export async function mountMockWidget(
             rpcUrl: "https://api.example.test/rpc",
             projectId,
             locale,
+            skipCreationTopUpCheck,
           },
           wallet,
           onEvent: (event: any) => (window as any).events.push(event),
@@ -568,6 +578,7 @@ export async function mountMockWidget(
       locale,
       hostPrompt: options?.hostPrompt,
       mainnet: options?.mainnet,
+      skipCreationTopUpCheck: options?.skipCreationTopUpCheck,
     },
   );
 }

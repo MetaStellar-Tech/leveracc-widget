@@ -18,7 +18,7 @@ export function CreateAccountForm({
   t: typeof en;
   onDone: () => void;
 }) {
-  const context = `${s.owner}:${c.config.network}:${c.config.projectId}:${c.config.rpcUrl}:${c.config.protocolServiceUrl}`;
+  const context = `${s.owner}:${c.config.network}:${c.config.projectId}:${c.config.rpcUrl}:${c.config.protocolServiceUrl}:${c.config.skipCreationTopUpCheck}`;
   const currentContext = useRef(context);
   currentContext.current = context;
   const sequence = useRef(0);

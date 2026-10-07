@@ -65,6 +65,12 @@ export function resolveConfig(input: WidgetConfig) {
     "INVALID_CONFIG",
     "Unsupported theme.",
   );
+  invariant(
+    input.skipCreationTopUpCheck === undefined ||
+      typeof input.skipCreationTopUpCheck === "boolean",
+    "INVALID_CONFIG",
+    "skipCreationTopUpCheck must be a boolean.",
+  );
   const preset = presets[input.network];
   const borrow = {
     termSeconds: 604800,
@@ -116,6 +122,7 @@ export function resolveConfig(input: WidgetConfig) {
           ? "https://protocol-service.leveracc.xyz"
           : "https://protocol-service-testnet.leveracc.xyz"),
     ),
+    skipCreationTopUpCheck: input.skipCreationTopUpCheck ?? false,
     locale: input.locale ?? "en",
     theme: input.theme ?? "dark",
     primaryColor: input.primaryColor ?? "#0099ff",
