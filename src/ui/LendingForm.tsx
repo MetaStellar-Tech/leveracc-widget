@@ -122,7 +122,7 @@ export function LendingForm({
               {m.borrowLoading ? (
                 <Skeleton label={t.loading} />
               ) : borrowQuote ? (
-                `${(borrowQuote.dailyRatePpm / 10000).toFixed(4)}%`
+                `${(borrowQuote.dailyRatePpm / 10_000_000).toFixed(4)}%`
               ) : (
                 "--"
               )}

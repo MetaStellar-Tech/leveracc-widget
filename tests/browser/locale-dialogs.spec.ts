@@ -11,6 +11,40 @@ const config = {
 };
 
 for (const locale of ["en", "zh"]) {
+  for (const [dailyRatePpm, expected] of [
+    [250_000, "0.0250%"],
+    [273_973, "0.0274%"],
+    [0, "0.0000%"],
+  ] as const) {
+    test(`${locale}: daily rate ${dailyRatePpm} uses contract precision across locale changes`, async ({
+      page,
+    }) => {
+      await mountMockWidget(page, locale, { dailyRatePpm });
+      await page
+        .getByRole("button", {
+          name: locale === "en" ? "Borrow" : "借款",
+          exact: true,
+        })
+        .click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("textbox").fill("10");
+      const terms = dialog.locator(".borrow-terms");
+      await expect(terms).toContainText(
+        locale === "en" ? "Current daily rate" : "当前日利率",
+      );
+      await expect(terms.getByText(expected, { exact: true })).toBeVisible();
+      const next = locale === "en" ? "zh" : "en";
+      await page.evaluate(
+        (config) => (window as any).testWidget.update({ config }),
+        { ...config, locale: next },
+      );
+      await expect(terms).toContainText(
+        next === "en" ? "Current daily rate" : "当前日利率",
+      );
+      await expect(terms.getByText(expected, { exact: true })).toBeVisible();
+    });
+  }
+
   test(`${locale}: borrow copy and live locale update preserve amount and signing`, async ({
     page,
   }) => {

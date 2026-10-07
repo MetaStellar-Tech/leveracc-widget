@@ -48,6 +48,7 @@ export async function mockBackend(
     gasFunding?: boolean;
     unauthorized?: boolean;
     unbound?: boolean;
+    dailyRatePpm?: number;
   } = {},
 ) {
   const gasReceiver = "0x5555555555555555555555555555555555555555";
@@ -191,7 +192,7 @@ export async function mockBackend(
     getCurrentBorrowRate: {
       version: 1n,
       updatedAt: 1n,
-      dailyRatePpm: 250,
+      dailyRatePpm: options.dailyRatePpm ?? 250_000,
       utilizationBps: 2500,
       cumulativeRatePpmSeconds: 0n,
       totalManagedAssets: 100000000000n,
