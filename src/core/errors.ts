@@ -16,15 +16,25 @@ export function invariant(
 }
 export function normalizeError(error: unknown): WidgetError {
   if (error instanceof WidgetError) return error;
-  let current: unknown = error;
-  for (let i = 0; current && i < 8; i++) {
-    const e = current as { code?: number; name?: string; cause?: unknown };
-    if (e.code === 4001 || e.name === "UserRejectedRequestError")
+  const pending: unknown[] = [error];
+  const visited = new Set<object>();
+  for (let i = 0; pending.length && i < 64; i++) {
+    const current = pending.shift();
+    if (!current || typeof current !== "object" || visited.has(current))
+      continue;
+    visited.add(current);
+    const e = current as Record<string, unknown>;
+    if (
+      e.code === 4001 ||
+      e.code === "4001" ||
+      e.code === "ACTION_REJECTED" ||
+      e.name === "UserRejectedRequestError"
+    )
       return new WidgetError(
         "USER_REJECTED",
         "Request declined in wallet. You can try again.",
       );
-    current = e.cause;
+    pending.push(e.cause, e.error, e.originalError, e.data, e.info);
   }
   return new WidgetError(
     "REQUEST_FAILED",

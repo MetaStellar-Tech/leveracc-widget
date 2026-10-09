@@ -3,7 +3,6 @@ import {
   creationKey,
   loadCreation,
   saveCreation,
-  clearCreation,
   confirmCreation,
 } from "../protocol/creation-tracking";
 import { zeroAddress, type Address, type Hex } from "viem";
@@ -407,6 +406,7 @@ export class WidgetController {
     error: unknown,
     context = this.context(),
     op?: OperationRecord,
+    generation = this.generation,
   ) {
     const e = normalizeError(error);
     this.emit({
@@ -418,10 +418,12 @@ export class WidgetController {
       hash: op?.hash,
     });
     if (
-      (context.projectId === this.config.projectId &&
+      generation === this.generation &&
+      !this.disposed &&
+      ((context.projectId === this.config.projectId &&
         context.network === this.config.network &&
         same(context.owner, this.state.owner)) ||
-      !context.owner
+        !context.owner)
     )
       this.patch({ error: e.message });
   }
@@ -650,10 +652,7 @@ export class WidgetController {
         let port: ProtocolPort;
         let didSubmit = false;
         const progress = (stage: Stage, hash?: Hex) => {
-          if (
-            action === "createAccount" &&
-            (stage === "submitting" || (stage === "submitted" && hash))
-          ) {
+          if (action === "createAccount" && stage === "submitted" && hash) {
             saveCreation(
               creationKey(config, owner, "create"),
               {
@@ -663,12 +662,13 @@ export class WidgetController {
                 hypeBefore: "0",
                 createdAt: Date.now(),
               },
-              stage === "submitted",
+              true,
             );
           }
           if (
             action === "createAccount" &&
-            (stage === "submitting" || stage === "submitted") &&
+            stage === "submitted" &&
+            hash &&
             generation === this.generation
           )
             this.patch({ creationPending: true });
@@ -739,8 +739,6 @@ export class WidgetController {
           }
         } catch (error) {
           const e = normalizeError(error);
-          if (action === "createAccount" && e.code === "USER_REJECTED")
-            clearCreation(creationKey(config, owner, "create"));
           op.error = e.message;
           if (
             op.stage === "submitting" &&
@@ -757,13 +755,13 @@ export class WidgetController {
                 : "failed",
           );
           e.message = op.error ?? e.message;
-          this.report(e, context, op);
+          this.report(e, context, op, generation);
         }
       });
     } catch (e) {
-      this.report(e, context);
+      this.report(e, context, undefined, generation);
     } finally {
-      if (generation === this.generation) {
+      if (generation === this.generation && !this.disposed) {
         this.patch({ busy: false });
         void this.refresh();
       }

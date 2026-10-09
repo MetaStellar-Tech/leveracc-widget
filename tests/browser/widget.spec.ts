@@ -1,3 +1,5 @@
+import { resolveConfig } from "../../src/core/config";
+import { creationKey } from "../../src/protocol/creation-tracking";
 import { test, expect } from "@playwright/test";
 import {
   mountMockWidget,
@@ -956,4 +958,64 @@ test("creation waits for its receipt across reload without sending again", async
       ),
     ),
   ).toHaveLength(0);
+});
+
+test("legacy hashless creation recovers after reload and permits signing", async ({
+  page,
+}) => {
+  const options = { noAccount: true, delayedCreationReceipt: true };
+  await mountMockWidget(page, "en", options);
+  const entry = page.getByRole("button", {
+    name: "Create Trading Account",
+    exact: true,
+  });
+  const sign = page.getByRole("button", {
+    name: "Sign & Create Account",
+    exact: true,
+  });
+  const resolved = resolveConfig(config);
+  await page.evaluate(
+    ({ key, receiver }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          source: "create",
+          receiver,
+          hypeBefore: "0",
+          createdAt: Date.now(),
+        }),
+      );
+    },
+    { key: creationKey(resolved, owner, "create"), receiver: resolved.factory },
+  );
+  await mountMockWidget(page, "en", options, true);
+  await entry.click();
+  await expect(sign).toBeEnabled();
+  expect(
+    await page.evaluate(() =>
+      Object.keys(localStorage).filter((key) =>
+        key.startsWith("leveracc:creation:v2:create:"),
+      ),
+    ),
+  ).toEqual([]);
+  expect(
+    await page.evaluate(() =>
+      (window as any).requests.filter(
+        (r: any) => r.method === "eth_sendTransaction",
+      ),
+    ),
+  ).toHaveLength(0);
+  await sign.click();
+  await expect(
+    page.getByText(
+      "Creating your trading account. Waiting for on-chain confirmation…",
+    ),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() =>
+      (window as any).requests.filter(
+        (r: any) => r.method === "eth_sendTransaction",
+      ),
+    ),
+  ).toHaveLength(1);
 });

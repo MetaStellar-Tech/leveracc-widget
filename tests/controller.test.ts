@@ -37,6 +37,7 @@ vi.mock("../src/protocol/port", () => ({
       sign: async (data: unknown) => {
         await guard();
         if (!current()) throw Error("Context changed");
+        progress("signing");
         return mock.sign(data);
       },
       write: async (call: unknown) => {
@@ -55,6 +56,7 @@ vi.mock("../src/protocol/port", () => ({
 }));
 import { WidgetController } from "../src/core/controller";
 import { resolveConfig } from "../src/core/config";
+import { creationKey, loadCreation } from "../src/protocol/creation-tracking";
 import { operationKey } from "../src/core/operations";
 function saveOperation(op: import("../src/types").OperationRecord) {
   localStorage.setItem(operationKey(op), JSON.stringify(op));
@@ -994,5 +996,187 @@ describe("creation confirmation", () => {
       creationPending: true,
     });
     expect(c.getSnapshot().error).toContain("does not match");
+  });
+});
+
+describe("creation signature error recovery", () => {
+  async function setup() {
+    created = false;
+    const result = make();
+    result.c.update({ config: { ...config, skipCreationTopUpCheck: true } });
+    await result.c.connect();
+    return result;
+  }
+  it.each([
+    { code: 4001 },
+    { error: { data: { originalError: { code: "4001" } } } },
+    Error("Signing service unavailable"),
+  ])("releases the operation after a signature failure: %j", async (error) => {
+    const { c } = await setup();
+    mock.sign.mockRejectedValueOnce(error);
+    await c.createAccount();
+    expect(c.getSnapshot()).toMatchObject({
+      busy: false,
+      creationPending: false,
+      operation: { stage: "failed" },
+    });
+    expect(mock.write).not.toHaveBeenCalled();
+    expect(
+      loadCreation(creationKey(c.config, owner, "create")),
+    ).toBeUndefined();
+    expect((await c.creationReadiness()).ready).toBe(true);
+    await c.createAccount();
+    expect(mock.sign).toHaveBeenCalledTimes(2);
+    expect(mock.write).toHaveBeenCalledOnce();
+  });
+  it("does not access cancellation storage before any submission", async () => {
+    const { c } = await setup();
+    const remove = vi
+      .spyOn(Storage.prototype, "removeItem")
+      .mockImplementation(() => {
+        throw Error("Storage denied");
+      });
+    try {
+      mock.sign.mockRejectedValueOnce({ code: 4001 });
+      await c.createAccount();
+      expect(remove).not.toHaveBeenCalled();
+      expect(c.getSnapshot()).toMatchObject({
+        busy: false,
+        operation: { stage: "failed" },
+      });
+      expect(c.getSnapshot().operation?.error).toContain("declined");
+    } finally {
+      remove.mockRestore();
+    }
+  });
+  it("recovers after a delayed signature rejection and a controller remount", async () => {
+    const { c } = await setup();
+    let reject!: (error: unknown) => void;
+    mock.sign.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, r) => {
+          reject = r;
+        }),
+    );
+    const running = c.createAccount();
+    await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
+    expect(c.getSnapshot().operation?.stage).toBe("signing");
+    expect(
+      loadCreation(creationKey(c.config, owner, "create")),
+    ).toBeUndefined();
+    reject({ info: { error: { code: 4001 } } });
+    await running;
+    c.destroy();
+    const { c: reopened } = await setup();
+    expect((await reopened.creationReadiness()).ready).toBe(true);
+    await reopened.createAccount();
+    expect(mock.write).toHaveBeenCalledOnce();
+  });
+  it("does not persist creation after wrapped transaction rejection", async () => {
+    const { c } = await setup();
+    mock.write.mockRejectedValueOnce({
+      data: { originalError: { code: 4001 } },
+    });
+    await c.createAccount();
+    expect(c.getSnapshot()).toMatchObject({
+      busy: false,
+      creationPending: false,
+      operation: { stage: "failed" },
+    });
+    expect(
+      loadCreation(creationKey(c.config, owner, "create")),
+    ).toBeUndefined();
+    expect((await c.creationReadiness()).ready).toBe(true);
+    await c.createAccount();
+    expect(mock.write).toHaveBeenCalledTimes(2);
+  });
+  it("allows explicit creation retry when no transaction hash was returned", async () => {
+    const { c } = await setup();
+    mock.write.mockRejectedValueOnce(Error("Network connection closed"));
+    await c.createAccount();
+    expect(
+      loadCreation(creationKey(c.config, owner, "create")),
+    ).toBeUndefined();
+    expect(c.getSnapshot().creationPending).toBe(false);
+    expect(c.getSnapshot().operation?.error).toContain(
+      "Submission result is unknown",
+    );
+    expect((await c.creationReadiness()).ready).toBe(true);
+    await c.createAccount();
+    expect(mock.write).toHaveBeenCalledTimes(2);
+  });
+  it("discards legacy hashless creation without deleting funding history", async () => {
+    const { c } = await setup();
+    const key = creationKey(c.config, owner, "create");
+    const fundingKey = creationKey(c.config, owner);
+    const record = {
+      source: "create",
+      receiver: c.config.factory,
+      hypeBefore: "0",
+      createdAt: Date.now(),
+    };
+    localStorage.setItem(key, JSON.stringify(record));
+    const funding = JSON.stringify({ ...record, source: "core" });
+    localStorage.setItem(fundingKey, funding);
+    await c.refresh();
+    expect(c.getSnapshot()).toMatchObject({
+      status: "noAccount",
+      creationPending: false,
+    });
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(localStorage.getItem(fundingKey)).toBe(funding);
+    expect(mock.receipt).not.toHaveBeenCalled();
+    localStorage.removeItem(fundingKey);
+    expect((await c.creationReadiness()).ready).toBe(true);
+    await c.createAccount();
+    expect(mock.write).toHaveBeenCalledOnce();
+  });
+  it("does not persist a creation request while the wallet has not returned a hash", async () => {
+    const { c } = await setup();
+    let reject!: (error: unknown) => void;
+    mock.write.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, r) => {
+          reject = r;
+        }),
+    );
+    const running = c.createAccount();
+    await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
+    expect(c.getSnapshot()).toMatchObject({
+      busy: true,
+      creationPending: false,
+    });
+    expect(
+      loadCreation(creationKey(c.config, owner, "create")),
+    ).toBeUndefined();
+    reject({ code: 4001 });
+    await running;
+    expect((await c.creationReadiness()).ready).toBe(true);
+  });
+  it("does not overwrite a new context with a late signature error", async () => {
+    const { c } = await setup();
+    let reject!: (error: unknown) => void;
+    mock.sign.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, r) => {
+          reject = r;
+        }),
+    );
+    const running = c.createAccount();
+    await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
+    c.update({
+      config: {
+        ...config,
+        skipCreationTopUpCheck: true,
+        rpcUrl: "https://new.example/rpc",
+      },
+    });
+    await c.refresh();
+    const snapshot = c.getSnapshot();
+    reject({ code: 4001 });
+    await running;
+    expect(c.getSnapshot()).toEqual(snapshot);
+    await c.createAccount();
+    expect(mock.write).toHaveBeenCalledOnce();
   });
 });

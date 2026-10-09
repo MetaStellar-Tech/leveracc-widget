@@ -31,7 +31,7 @@ export function creationKey(
 }
 const submittedMemory = new Map<string, PendingCreation>();
 
-// Persist intent before broadcast: unknown outcomes must not enable another payment.
+// Funding persists before broadcast; account creation persists only a returned hash.
 export function saveCreation(
   key: string,
   value: PendingCreation,
@@ -65,6 +65,14 @@ export function loadCreation(key: string): PendingCreation | undefined {
     "INVALID_PENDING_CREATION",
     "Unable to read the pending creation transaction.",
   );
+  if (value.source === "create" && !value.hash) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore legacy hashless creation records even when storage is read-only.
+    }
+    return;
+  }
   return value;
 }
 export function clearCreation(key: string) {

@@ -229,3 +229,93 @@ for (const action of ["Transfer", "Deposit", "Withdraw"]) {
     await expect(dialog.locator(".primary")).toBeDisabled();
   });
 }
+
+for (const wrapped of [false, true]) {
+  test(`creation can reopen and sign after closing the wallet popup (wrapped=${wrapped})`, async ({
+    page,
+  }) => {
+    await mountMockWidget(page, "en", { noAccount: true });
+    await page.evaluate((wrapped) => {
+      const wallet = (window as any).testWallet;
+      const original = wallet.request;
+      wallet.request = async (request: any) => {
+        if (request.method !== "eth_signTypedData_v4") return original(request);
+        wallet.request = original;
+        return new Promise((_resolve, reject) => {
+          const popup = document.createElement("div");
+          popup.setAttribute("role", "dialog");
+          popup.setAttribute("aria-label", "Wallet signature");
+          popup.style.cssText =
+            "position:fixed;inset:20%;z-index:2147483647;background:white";
+          const close = document.createElement("button");
+          close.textContent = "×";
+          close.setAttribute("aria-label", "Close wallet signature");
+          close.onclick = () => {
+            popup.remove();
+            reject(
+              wrapped
+                ? { error: { data: { originalError: { code: "4001" } } } }
+                : { code: 4001 },
+            );
+          };
+          popup.append(close);
+          document.body.append(popup);
+        });
+      };
+    }, wrapped);
+    const entry = page.getByRole("button", {
+      name: "Create Trading Account",
+      exact: true,
+    });
+    await entry.click();
+    const submit = page.getByRole("button", {
+      name: "Sign & Create Account",
+      exact: true,
+    });
+    await submit.click();
+    await page
+      .getByRole("button", { name: "Close wallet signature", exact: true })
+      .click();
+    await expect(page.locator(".error-toast")).toContainText("declined");
+    await expect(submit).toBeEnabled();
+    expect(
+      await page.evaluate(
+        () =>
+          (window as any).requests.filter(
+            (r: any) => r.method === "eth_sendTransaction",
+          ).length,
+      ),
+    ).toBe(0);
+    expect(
+      await page.evaluate(() =>
+        Object.keys(localStorage).filter((key) =>
+          key.startsWith("leveracc:creation:v2:create:"),
+        ),
+      ),
+    ).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await entry.click();
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    await expect(
+      page.getByRole("button", { name: "Done", exact: true }),
+    ).toBeEnabled();
+    expect(
+      await page.evaluate(
+        () =>
+          (window as any).requests.filter(
+            (r: any) => r.method === "eth_signTypedData_v4",
+          ).length,
+      ),
+    ).toBe(1);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as any).requests.filter(
+            (r: any) => r.method === "eth_sendTransaction",
+          ).length,
+      ),
+    ).toBe(1);
+  });
+}

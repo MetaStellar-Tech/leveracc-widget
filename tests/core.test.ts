@@ -225,3 +225,34 @@ describe("recovery and concurrency", () => {
     await expect(withOperationLock(op, async () => 42)).resolves.toBe(42);
   });
 });
+
+describe("wallet cancellation errors", () => {
+  it.each([
+    { code: 4001 },
+    { code: "4001" },
+    { name: "UserRejectedRequestError" },
+    { code: "ACTION_REJECTED" },
+    { cause: { error: { data: { originalError: { code: 4001 } } } } },
+    { code: -32603, data: { originalError: { code: "4001" } } },
+    { info: { error: { code: 4001 } } },
+  ])("recognizes explicit cancellation: %j", (error) => {
+    expect(normalizeError(error).code).toBe("USER_REJECTED");
+  });
+  it.each([
+    Error("Network request cancelled"),
+    { code: -32002, message: "Request already pending" },
+    { code: -32603, data: { message: "Connection closed" } },
+    { name: "AbortError" },
+    { message: "User rejected request" },
+  ])("does not infer cancellation from ambiguous errors: %j", (error) => {
+    expect(normalizeError(error).code).toBe("REQUEST_FAILED");
+  });
+  it("handles cyclic wrappers and still examines sibling errors", () => {
+    const error: Record<string, unknown> = {};
+    error.cause = error;
+    error.data = { originalError: { code: 4001 } };
+    expect(normalizeError(error).code).toBe("USER_REJECTED");
+    delete error.data;
+    expect(normalizeError(error).code).toBe("REQUEST_FAILED");
+  });
+});
