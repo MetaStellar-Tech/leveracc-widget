@@ -1,5 +1,6 @@
 import { resolveConfig } from "../../src/core/config";
 import { creationKey } from "../../src/protocol/creation-tracking";
+import type { WidgetConfig } from "../../src/types";
 import { test, expect } from "@playwright/test";
 import {
   mountMockWidget,
@@ -8,7 +9,7 @@ import {
   owner,
   hash,
 } from "./rpc-fixture";
-const config = {
+const config: WidgetConfig = {
   network: "testnet",
   projectId,
   rpcUrl: "https://api.example.test/rpc",

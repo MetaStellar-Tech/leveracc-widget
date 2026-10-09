@@ -32,7 +32,7 @@ export const owner = "0x1111111111111111111111111111111111111111",
   account = "0x2222222222222222222222222222222222222222",
   agent = "0x3333333333333333333333333333333333333333",
   asset = "0x4444444444444444444444444444444444444444";
-export const projectId = `0x${"ab".repeat(32)}`,
+export const projectId = `0x${"ab".repeat(32)}` as const,
   hash = `0x${"ef".repeat(32)}`;
 export async function mockBackend(
   page: Page,
