@@ -169,7 +169,7 @@ const config = {
 
 省略两个新开关时，完整保留旧行为，包括 `skipCreationTopUpCheck: true` 仅检测 HYPE。显式填写任意一个开关后，另一个默认 `true`，此时 `skipCreationTopUpCheck` 仅跳过 Gas 付款历史，不能跳过已开启的激活准备。仅兑换模式读取 `/api/v1/gas-conversions`，仅激活模式读取 `/api/v1/account-activations`，合并模式继续使用 `/api/v1/gas-top-ups`。显式合并模式校验成功服务记录中的激活费用分配，Gas-only 记录不能作为合并激活的资格证明。
 
-弹窗保留现有准备与创建步骤、按钮位置和自动轮询，仅按模式调整文案及金额；两项都关闭时显示无需准备。不增加用户模式选择器。主网使用 Arbitrum USDC，测试网使用 HyperCore Spot。
+弹窗保留现有准备与创建步骤、按钮位置和自动轮询，仅按模式调整文案及金额；两项都关闭时隐藏准备步骤，仅显示创建账户步骤。不增加用户模式选择器。主网使用 Arbitrum USDC，测试网使用 HyperCore Spot。
 
 独立模式需要额外的钱包消息签名：获取路由配置和 `/orders/challenge`，校验付款人、模式、来源、收款地址、金额、nonce、有效期及签名消息，签名后通过 POST `/orders` 创建订单，再进行转账。接口前缀为 `/api/v1/gas-conversions` 或 `/api/v1/account-activations`。应允许宿主页面向服务发送跨域 GET 和 JSON POST 请求。合并模式保留原来的直接转账，不增加订单签名。
 

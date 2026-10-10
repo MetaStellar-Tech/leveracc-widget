@@ -5,14 +5,6 @@ import type { en } from "./strings";
 export function creationCopy(config: ResolvedConfig, t: typeof en): typeof en {
   const flow = creationFlow(config);
   const zh = config.locale === "zh";
-  if (flow === "none")
-    return {
-      ...t,
-      gasStep: zh ? "账户准备" : "Account preparation",
-      gasReady: zh
-        ? "无需兑换 Gas 或支付激活费用。"
-        : "No Gas conversion or activation payment required.",
-    };
   if (flow === "activation_only")
     return {
       ...t,

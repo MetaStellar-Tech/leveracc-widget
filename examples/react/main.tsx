@@ -64,6 +64,8 @@ function App() {
     projectId: project as `0x${string}`,
     network: "testnet",
     locale: "en",
+    creationGasConversionEnabled: false,
+    creationAccountActivationEnabled: false,
   });
   return (
     <main>

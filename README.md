@@ -152,7 +152,7 @@ When Gas conversion is disabled, neither the creation readiness check nor accoun
 
 Omitting both new switches preserves the complete legacy behavior, including `skipCreationTopUpCheck: true` checking only HYPE. Once either switch is explicitly supplied, the other defaults to `true` and `skipCreationTopUpCheck` skips only Gas payment history; it never skips enabled activation preparation. Gas-only mode reads `/api/v1/gas-conversions`, activation-only mode reads `/api/v1/account-activations`, and combined mode continues to use `/api/v1/gas-top-ups`. Explicit combined mode checks activation allocation in successful service records. Gas-only records cannot establish combined activation eligibility.
 
-The modal keeps the existing preparation and creation steps, button placement, and automatic polling. Copy and amounts follow the selected mode, and both-off mode shows that no preparation is needed. There is no end-user mode selector. Mainnet uses Arbitrum USDC; testnet uses HyperCore Spot.
+The modal keeps the existing preparation and creation steps, button placement, and automatic polling. Copy and amounts follow the selected mode, and both-off mode hides the preparation step and shows only account creation. There is no end-user mode selector. Mainnet uses Arbitrum USDC; testnet uses HyperCore Spot.
 
 See [order and recovery details in the wallet integration guide](docs/WALLET_INTEGRATION.md#creation-gas-conversion-and-activation).
 

@@ -1060,12 +1060,24 @@ for (const activation of [false, true]) {
     await expect(
       page.getByRole("button", { name: "Sign & Create Account", exact: true }),
     ).toBeEnabled();
-    await expect(
-      page.getByRole("heading", {
-        name: activation ? "Prepare account activation" : "Account preparation",
-        exact: true,
-      }),
-    ).toBeVisible();
+    if (activation) {
+      await expect(
+        page.getByRole("heading", {
+          name: "Prepare account activation",
+          exact: true,
+        }),
+      ).toBeVisible();
+    } else {
+      await expect(
+        page.getByRole("heading", { name: "Account preparation", exact: true }),
+      ).toHaveCount(0);
+      await expect(page.locator(".creation-steps .step")).toHaveCount(1);
+      expect(
+        await page
+          .locator(".creation-steps .step")
+          .evaluate((element) => getComputedStyle(element, "::after").content),
+      ).toBe("none");
+    }
     await expect(page.getByRole("button", { name: /Swap 3 USDC/ })).toHaveCount(
       0,
     );

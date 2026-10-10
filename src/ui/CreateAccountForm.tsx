@@ -135,48 +135,54 @@ export function CreateAccountForm({
   };
   return (
     <div className="creation-steps">
-      <div className="step">
-        <span className={`step-badge ${gasReady || done ? "complete" : ""}`}>
-          <Icon name={gasReady || done ? "check" : "fuel"} />
-        </span>
-        <div>
-          <h3>{t.gasStep}</h3>
-          {gasReady || done ? (
-            <p>{t.gasReady}</p>
-          ) : c.usesBuiltInGasTopUp ? (
-            <CreationGasStep
-              source={source}
-              activationOnly={flow === "activation_only"}
-              t={t}
-              disabled={blocked || s.busy || fundingPending}
-              pending={fundingPending}
-              failure={
-                current?.value?.funding?.state === "failed" ? error : undefined
-              }
-              submitting={s.busy}
-              onFund={topUp}
-            />
-          ) : (
-            <>
-              <p>{pending ? <Skeleton label={t.loading} /> : t.gasRequired}</p>
-              {c.config.creationGasConversionEnabled !== false &&
-                gas !== undefined && (
-                  <p className="mono">{formatEther(gas)} HYPE</p>
+      {flow !== "none" && (
+        <div className="step">
+          <span className={`step-badge ${gasReady || done ? "complete" : ""}`}>
+            <Icon name={gasReady || done ? "check" : "fuel"} />
+          </span>
+          <div>
+            <h3>{t.gasStep}</h3>
+            {gasReady || done ? (
+              <p>{t.gasReady}</p>
+            ) : c.usesBuiltInGasTopUp ? (
+              <CreationGasStep
+                source={source}
+                activationOnly={flow === "activation_only"}
+                t={t}
+                disabled={blocked || s.busy || fundingPending}
+                pending={fundingPending}
+                failure={
+                  current?.value?.funding?.state === "failed"
+                    ? error
+                    : undefined
+                }
+                submitting={s.busy}
+                onFund={topUp}
+              />
+            ) : (
+              <>
+                <p>
+                  {pending ? <Skeleton label={t.loading} /> : t.gasRequired}
+                </p>
+                {c.config.creationGasConversionEnabled !== false &&
+                  gas !== undefined && (
+                    <p className="mono">{formatEther(gas)} HYPE</p>
+                  )}
+                <code className="owner-address">{s.owner}</code>
+                {c.hasGasTopUp && (
+                  <button
+                    className="primary"
+                    disabled={blocked || s.busy}
+                    onClick={topUp}
+                  >
+                    {s.busy ? t.preparing : t.topUpGas}
+                  </button>
                 )}
-              <code className="owner-address">{s.owner}</code>
-              {c.hasGasTopUp && (
-                <button
-                  className="primary"
-                  disabled={blocked || s.busy}
-                  onClick={topUp}
-                >
-                  {s.busy ? t.preparing : t.topUpGas}
-                </button>
-              )}
-            </>
-          )}
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
       <div className="step">
         <span
           className={`step-badge ${done ? "complete" : gasReady ? "active" : ""}`}
