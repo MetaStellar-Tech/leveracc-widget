@@ -1,3 +1,5 @@
+import { creationCopy } from "./creation-copy";
+import { creationFlow } from "../protocol/creation-policy";
 import { ErrorToast } from "./ErrorToast";
 import { CreationGasStep } from "./CreationGasStep";
 import { Skeleton } from "./Skeleton";
@@ -10,7 +12,7 @@ import type { en } from "./strings";
 export function CreateAccountForm({
   controller: c,
   s,
-  t,
+  t: translations,
   onDone,
 }: {
   controller: WidgetController;
@@ -18,7 +20,9 @@ export function CreateAccountForm({
   t: typeof en;
   onDone: () => void;
 }) {
-  const context = `${s.owner}:${c.config.network}:${c.config.projectId}:${c.config.rpcUrl}:${c.config.arbitrumRpcUrl}:${c.config.protocolServiceUrl}:${c.config.skipCreationTopUpCheck}`;
+  const t = creationCopy(c.config, translations);
+  const flow = creationFlow(c.config);
+  const context = `${s.owner}:${c.config.network}:${c.config.projectId}:${c.config.rpcUrl}:${c.config.arbitrumRpcUrl}:${c.config.protocolServiceUrl}:${c.config.skipCreationTopUpCheck}:${flow}:${c.config.creationLegacyMode}`;
   const currentContext = useRef(context);
   currentContext.current = context;
   const sequence = useRef(0);
@@ -142,6 +146,7 @@ export function CreateAccountForm({
           ) : c.usesBuiltInGasTopUp ? (
             <CreationGasStep
               source={source}
+              activationOnly={flow === "activation_only"}
               t={t}
               disabled={blocked || s.busy || fundingPending}
               pending={fundingPending}
@@ -154,9 +159,10 @@ export function CreateAccountForm({
           ) : (
             <>
               <p>{pending ? <Skeleton label={t.loading} /> : t.gasRequired}</p>
-              {gas !== undefined && (
-                <p className="mono">{formatEther(gas)} HYPE</p>
-              )}
+              {c.config.creationGasConversionEnabled !== false &&
+                gas !== undefined && (
+                  <p className="mono">{formatEther(gas)} HYPE</p>
+                )}
               <code className="owner-address">{s.owner}</code>
               {c.hasGasTopUp && (
                 <button

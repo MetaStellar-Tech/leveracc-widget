@@ -87,6 +87,8 @@ adapter.destroy();
 
 ## 项目授权与 Gas 服务
 
+以下介绍未填写新创建开关时的兼容流程；独立模式见[创建前的 Gas 兑换与激活](#创建前的-gas-兑换与激活)。
+
 钱包连接不等于项目交易授权。新建 LAAccount 并不自动生成项目 Execution Wallet 授权或设置 Risk Wallet。项目方须根据自己的服务契约实现这些操作；wagmi / Privy 本身无法提供项目方签名。
 
 默认快速借入弹窗不显示账户设置说明或设置按钮。项目方须在自己的页面提供账户设置流程。`onAccountSetup` 和控制器的 `setupAccount()` 继续保留以兼容已有集成，但默认弹窗不会调用它们。链上前置条件未满足时仍会阻止借入。
@@ -139,6 +141,43 @@ const config = {
 - 广播前必须能够使用浏览器存储，以便恢复待处理转账。本地记录不构成资格证明；仅开启 `skipCreationTopUpCheck` 时，直接转入 HYPE 才能替代历史 3 USDC 记录要求。已有待处理内置付款仍查询服务端记录以跟踪状态。
 
 配置 `onGasTopUp` 后使用宿主流程，仍执行服务端与 gas 复查。除非开启 `skipCreationTopUpCheck`，否则宿主流程需生成兼容的充值记录；开启后仅检查 gas 余额。
+
+### 创建前的 Gas 兑换与激活
+
+可独立配置 `creationGasConversionEnabled` 和 `creationAccountActivationEnabled`。两者仅接受布尔值，默认均为 `true`。
+
+| Gas 兑换 | 账户激活 | 准备流程 |
+| --- | --- | --- |
+| `true` | `true` | 一次合并转账，支付 3 USDC |
+| `true` | `false` | 独立兑换 Gas，支付 3 USDC |
+| `false` | `true` | 独立激活付款，支付 1.1 USDC |
+| `false` | `false` | 直接进入创建账户流程 |
+
+仅激活账户的配置：
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "zh",
+  creationGasConversionEnabled: false,
+  creationAccountActivationEnabled: true,
+} as const;
+```
+
+关闭 Gas 兑换后，创建资格检测与账户提交均不再要求固定的 0.01 HYPE 最低余额。实际交易模拟和钱包交易校验仍然生效。关闭的功能不需要对应的资格查询。两项都关闭时，无需付款服务即可创建账户；此前已提交的付款仍保留并单独核对，不会因已关闭功能的资格条件阻止创建。
+
+省略两个新开关时，完整保留旧行为，包括 `skipCreationTopUpCheck: true` 仅检测 HYPE。显式填写任意一个开关后，另一个默认 `true`，此时 `skipCreationTopUpCheck` 仅跳过 Gas 付款历史，不能跳过已开启的激活准备。仅兑换模式读取 `/api/v1/gas-conversions`，仅激活模式读取 `/api/v1/account-activations`，合并模式继续使用 `/api/v1/gas-top-ups`。显式合并模式校验成功服务记录中的激活费用分配，Gas-only 记录不能作为合并激活的资格证明。
+
+弹窗保留现有准备与创建步骤、按钮位置和自动轮询，仅按模式调整文案及金额；两项都关闭时显示无需准备。不增加用户模式选择器。主网使用 Arbitrum USDC，测试网使用 HyperCore Spot。
+
+独立模式需要额外的钱包消息签名：获取路由配置和 `/orders/challenge`，校验付款人、模式、来源、收款地址、金额、nonce、有效期及签名消息，签名后通过 POST `/orders` 创建订单，再进行转账。接口前缀为 `/api/v1/gas-conversions` 或 `/api/v1/account-activations`。应允许宿主页面向服务发送跨域 GET 和 JSON POST 请求。合并模式保留原来的直接转账，不增加订单签名。
+
+订单创建成功不代表付款确认。组件查询 `/orders/{intent_id}` 及其关联的 `matched_top_up_id` 或 `matched_activation_id`。激活状态 `waiting_account`、`submitting`、`activated` 满足创建准备条件；`waiting_account` 表示付款已确认，等待账户创建后履行激活。服务也可通过 `already_activated` 确认已经激活。只有未付款订单或笼统的 `activation_pending` 状态不能放行创建。仅激活模式不会等待 HYPE 到账，也不会在创建前等待最终激活完成。Gas 兑换仍需至少 0.01 HYPE 和成功兑换证明；跳过历史检查的配置仅豁免兑换证明要求。
+
+待处理付款记录保留模式、金额、订单 ID、关联记录 ID 及转账标识；旧记录按合并付款恢复。重新打开页面或拒绝转账后，可从服务恢复未过期订单。即将过期的订单需等待过期后才能替换，不得使用过期订单付款。提交结果未知的转账会持续锁定直至核对清楚，即使订单已经过期也不会直接重付。钱包、网络、服务地址或开关变化会使旧资格检测失效。跨标签页锁防止并发付款。创建提交前会复查与弹窗相同的条件。
+
+`topUpGas()` 和 `onGasTopUp` 保持可用。回调新增可选的 `flow`（`combined`、`gas_only`、`activation_only` 或 `none`）与 `amountRaw` 字段，描述所选准备模式。回调覆盖当前模式的付款流程，并须产生对应的服务端证明。两项都关闭时不调用回调。回调正常返回本身不能证明已满足付款条件。
 
 ## 验证范围
 

@@ -1020,3 +1020,106 @@ test("legacy hashless creation recovers after reload and permits signing", async
     ),
   ).toHaveLength(1);
 });
+
+for (const activation of [false, true]) {
+  test(`creation with Gas disabled preserves the modal and ${activation ? "accepts confirmed activation funding" : "requires no preparation"}`, async ({
+    page,
+  }) => {
+    await mountMockWidget(page, "en", {
+      noAccount: true,
+      lowGas: true,
+      noTopUp: true,
+      topUpError: true,
+      creationGasConversionEnabled: false,
+      creationAccountActivationEnabled: activation,
+    });
+    const queries: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/v1/")) queries.push(request.url());
+    });
+    await page.route("**/api/v1/account-activations?*", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            items: [
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                user_eoa: owner,
+                status: "waiting_account",
+              },
+            ],
+          },
+        }),
+      }),
+    );
+    await page
+      .getByRole("button", { name: "Create Trading Account", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Sign & Create Account", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("heading", {
+        name: activation ? "Prepare account activation" : "Account preparation",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /Swap 3 USDC/ })).toHaveCount(
+      0,
+    );
+    expect(
+      queries.some(
+        (url) => url.includes("gas-top-ups") || url.includes("gas-conversions"),
+      ),
+    ).toBe(false);
+    if (!activation) expect(queries).toEqual([]);
+    await page
+      .getByRole("button", { name: "Sign & Create Account", exact: true })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as any).events.some(
+            (e: any) =>
+              e.type === "operationSubmitted" && e.action === "createAccount",
+          ),
+        ),
+      )
+      .toBe(true);
+  });
+}
+
+test("activation-only keeps the existing funding button layout with 1.1 USDC copy", async ({
+  page,
+}) => {
+  await mountMockWidget(page, "en", {
+    noAccount: true,
+    lowGas: true,
+    creationGasConversionEnabled: false,
+    creationAccountActivationEnabled: true,
+  });
+  await page.route("**/api/v1/account-activations**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: route.request().url().includes("/config")
+          ? { enabled: true, status: "ready_to_pay" }
+          : { items: [] },
+      }),
+    }),
+  );
+  await page
+    .getByRole("button", { name: "Create Trading Account", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", {
+      name: "Sign & Pay 1.1 USDC for Activation",
+      exact: true,
+    }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Sign & Create Account", exact: true }),
+  ).toHaveCount(0);
+});

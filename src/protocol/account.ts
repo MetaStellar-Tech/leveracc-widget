@@ -255,7 +255,8 @@ export async function createAccount(
   const existing = await primary(port, config, owner);
   if (!same(existing, zeroAddress)) return existing;
   invariant(
-    (await port.nativeBalance(owner)) >= CREATION_GAS_MINIMUM,
+    !config.creationGasConversionEnabled ||
+      (await port.nativeBalance(owner)) >= CREATION_GAS_MINIMUM,
     "INSUFFICIENT_GAS",
     "Fund your owner wallet with at least 0.01 HYPE before creating the account.",
   );

@@ -44,6 +44,8 @@ export async function mockBackend(
     lowGas?: boolean;
     noTopUp?: boolean;
     skipCreationTopUpCheck?: boolean;
+    creationGasConversionEnabled?: boolean;
+    creationAccountActivationEnabled?: boolean;
     topUpError?: boolean;
     gasFunding?: boolean;
     delayedCreationReceipt?: boolean;
@@ -515,6 +517,8 @@ export async function mountMockWidget(
       hostPrompt,
       mainnet,
       skipCreationTopUpCheck,
+      creationGasConversionEnabled,
+      creationAccountActivationEnabled,
     }) => {
       document.body.innerHTML =
         '<main style="display:block;max-width:480px;margin:20px auto;padding:12px"><div id="test-widget"></div></main>';
@@ -576,6 +580,8 @@ export async function mountMockWidget(
             projectId,
             locale,
             skipCreationTopUpCheck,
+            creationGasConversionEnabled,
+            creationAccountActivationEnabled,
           },
           wallet,
           onEvent: (event: any) => (window as any).events.push(event),
@@ -590,6 +596,9 @@ export async function mountMockWidget(
       hostPrompt: options?.hostPrompt,
       mainnet: options?.mainnet,
       skipCreationTopUpCheck: options?.skipCreationTopUpCheck,
+      creationGasConversionEnabled: options?.creationGasConversionEnabled,
+      creationAccountActivationEnabled:
+        options?.creationAccountActivationEnabled,
     },
   );
 }

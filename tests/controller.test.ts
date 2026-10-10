@@ -1180,3 +1180,225 @@ describe("creation signature error recovery", () => {
     expect(mock.write).toHaveBeenCalledOnce();
   });
 });
+
+describe("independent creation requirements", () => {
+  const activation = {
+    id: "11111111-1111-4111-8111-111111111111",
+    user_eoa: owner,
+    status: "waiting_account",
+  };
+  async function configured(gas: boolean, activate: boolean, skip = false) {
+    created = false;
+    const { c } = make();
+    c.update({
+      config: {
+        ...config,
+        creationGasConversionEnabled: gas,
+        creationAccountActivationEnabled: activate,
+        skipCreationTopUpCheck: skip,
+      },
+    });
+    await c.connect();
+    mock.gas.mockClear();
+    vi.mocked(fetch).mockClear();
+    return c;
+  }
+  it("creates without HYPE or payment services when both features are off", async () => {
+    const c = await configured(false, false);
+    mock.gas.mockRejectedValue(Error("Do not query gas"));
+    vi.mocked(fetch).mockRejectedValue(Error("Do not query service"));
+    expect((await c.creationReadiness()).ready).toBe(true);
+    await c.createAccount();
+    expect(mock.sign).toHaveBeenCalled();
+    expect(mock.write).toHaveBeenCalled();
+    expect(mock.gas).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(["waiting_account", "submitting", "activated"])(
+    "accepts activation %s without querying Gas",
+    async (status) => {
+      const c = await configured(false, true);
+      history([{ ...activation, status }]);
+      mock.gas.mockRejectedValue(Error("Do not query gas"));
+      expect((await c.creationReadiness()).ready).toBe(true);
+      await c.createAccount();
+      expect(mock.write).toHaveBeenCalled();
+      expect(mock.gas).not.toHaveBeenCalled();
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.every(([url]) =>
+            String(url).includes("account-activations"),
+          ),
+      ).toBe(true);
+    },
+  );
+  it("does not treat an active unpaid order as confirmed activation", async () => {
+    const c = await configured(false, true, true);
+    vi.mocked(fetch).mockImplementation(
+      async (url) =>
+        new Response(
+          JSON.stringify({
+            data: String(url).includes("/config")
+              ? { enabled: true, status: "activation_pending" }
+              : { items: [] },
+          }),
+        ),
+    );
+    expect((await c.creationReadiness()).ready).toBe(false);
+    await c.createAccount();
+    expect(mock.sign).not.toHaveBeenCalled();
+  });
+  it("accepts service evidence of already activated accounts", async () => {
+    const c = await configured(false, true);
+    vi.mocked(fetch).mockImplementation(
+      async (url) =>
+        new Response(
+          JSON.stringify({
+            data: String(url).includes("/config")
+              ? { enabled: true, status: "already_activated" }
+              : { items: [] },
+          }),
+        ),
+    );
+    expect((await c.creationReadiness()).ready).toBe(true);
+  });
+  it("queries only conversions when activation is disabled", async () => {
+    const c = await configured(true, false);
+    history([
+      {
+        id: "gas",
+        user_eoa: owner,
+        requested_usdc_amount_raw: "3000000",
+        phase: "success",
+        terminal: true,
+      },
+    ]);
+    expect((await c.creationReadiness()).ready).toBe(true);
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.every(([url]) => String(url).includes("gas-conversions")),
+    ).toBe(true);
+  });
+  it("keeps explicit combined activation required even when Gas history is skipped", async () => {
+    const c = await configured(true, true, true);
+    const paid = {
+      requested_usdc_amount_raw: "3000000",
+      phase: "success",
+      terminal: true,
+    };
+    history([paid]);
+    expect((await c.creationReadiness()).ready).toBe(false);
+    history([
+      {
+        ...paid,
+        cost_breakdown: {
+          activation_required: true,
+          activation_fee_reserved_usdc_amount_raw: "1000000",
+          activation_transfer_reserved_usdc_amount_raw: "100000",
+        },
+      },
+    ]);
+    expect((await c.creationReadiness()).ready).toBe(true);
+  });
+  it("does not let an unrelated pending payment service failure block both-off creation", async () => {
+    const c = await configured(false, false);
+    localStorage.setItem(
+      creationKey(c.config, owner),
+      JSON.stringify({
+        source: "core",
+        receiver: account,
+        hypeBefore: "0",
+        createdAt: Date.now(),
+      }),
+    );
+    vi.mocked(fetch).mockRejectedValue(Error("Old payment service offline"));
+    expect((await c.creationReadiness()).ready).toBe(true);
+    expect(loadCreation(creationKey(c.config, owner))).toBeDefined();
+  });
+  it("invalidates a delayed activation check after switching the feature off", async () => {
+    const c = await configured(false, true);
+    let respond!: (r: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          respond = r;
+        }),
+    );
+    const reading = c.creationReadiness();
+    c.update({
+      config: {
+        ...config,
+        creationGasConversionEnabled: false,
+        creationAccountActivationEnabled: false,
+      },
+    });
+    respond(new Response(JSON.stringify({ data: { items: [activation] } })));
+    await expect(reading).rejects.toMatchObject({ code: "CONTEXT_CHANGED" });
+    await c.connect();
+    expect((await c.creationReadiness()).ready).toBe(true);
+  });
+  it("passes the activation mode and exact amount to the existing host callback", async () => {
+    const c = await configured(false, true);
+    vi.mocked(fetch).mockImplementation(
+      async (url) =>
+        new Response(
+          JSON.stringify({
+            data: String(url).includes("/config")
+              ? { enabled: true, status: "ready_to_pay" }
+              : { items: [] },
+          }),
+        ),
+    );
+    const callback = vi.fn();
+    c.update({ onGasTopUp: callback });
+    await c.topUpGas();
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner,
+        flow: "activation_only",
+        amountRaw: "1100000",
+      }),
+    );
+  });
+});
+
+it("does not mistake zero combined activation allocation for paid activation", async () => {
+  created = false;
+  const { c } = make();
+  c.update({
+    config: {
+      ...config,
+      creationGasConversionEnabled: true,
+      creationAccountActivationEnabled: true,
+    },
+  });
+  await c.connect();
+  vi.mocked(fetch).mockImplementation(
+    async (url) =>
+      new Response(
+        JSON.stringify({
+          data: String(url).includes("gas-top-ups")
+            ? {
+                items: [
+                  {
+                    requested_usdc_amount_raw: "3000000",
+                    phase: "success",
+                    terminal: true,
+                    cost_breakdown: {
+                      activation_required: false,
+                      activation_fee_reserved_usdc_amount_raw: "0",
+                      activation_transfer_reserved_usdc_amount_raw: "0",
+                    },
+                  },
+                ],
+              }
+            : String(url).includes("/config")
+              ? { enabled: false, status: "unavailable" }
+              : { items: [] },
+        }),
+      ),
+  );
+  expect((await c.creationReadiness()).ready).toBe(false);
+});

@@ -49,7 +49,10 @@ const config = resolveConfig({
   network: "mainnet",
   projectId: `0x${"ab".repeat(32)}`,
 });
-const testnet = resolveConfig({ ...config, network: "testnet" });
+const testnet = resolveConfig({
+  projectId: config.projectId,
+  network: "testnet",
+});
 const port = {
   nativeBalance: async () => 0n,
   read: vi.fn(async ({ functionName }: { functionName: string }) =>
@@ -400,4 +403,350 @@ it("retains a returned hash when storage fails after broadcast", async () => {
   await expect(start()).rejects.toMatchObject({ code: "FUNDING_PENDING" });
   spy.mockRestore();
   clearCreation(creationKey(config, owner));
+});
+
+const orderId = "11111111-1111-4111-8111-111111111111";
+const matchedId = "22222222-2222-4222-8222-222222222222";
+const nonce = "33333333-3333-4333-8333-333333333333";
+function standalone(gas: boolean, network: "mainnet" | "testnet" = "mainnet") {
+  return resolveConfig({
+    projectId: config.projectId,
+    network,
+    creationGasConversionEnabled: gas,
+    creationAccountActivationEnabled: !gas,
+  });
+}
+function paymentService(
+  gas: boolean,
+  source: "arbitrum" | "core" = "arbitrum",
+) {
+  const flow = gas ? "gas_only" : "activation_only";
+  const raw = gas ? "3000000" : "1100000";
+  let order: Record<string, unknown> | undefined;
+  const expires = new Date(
+    Math.floor(Date.now() / 1000) * 1000 + 600000,
+  ).toISOString();
+  const challenge = {
+    flow,
+    source,
+    user_eoa: owner,
+    receiver_address: receiver,
+    amount_raw: raw,
+    nonce,
+    expires_at: expires,
+    signing_message: `LeverAcc Gas Station Payment Intent\nVersion: 1\nFlow: ${flow}\nSource: ${source}\nPayer: ${owner}\nReceiver: ${receiver}\nAmountRaw: ${raw}\nNonce: ${nonce}\nExpiresAt: ${Date.parse(expires) / 1000}`,
+  };
+  const signMessage = vi.fn(async () => "0x1234");
+  m.signer.mockResolvedValue({ writeContract: m.write, signMessage });
+  vi.mocked(fetch).mockImplementation(async (url, options) => {
+    const path = String(url);
+    let data: unknown;
+    if (path.includes("/config"))
+      data = gas
+        ? service
+        : {
+            enabled: true,
+            status: order ? "activation_pending" : "ready_to_pay",
+            payment_usdc_amount_raw: raw,
+            activation_receiver_address: receiver,
+            arbitrum: service.arbitrum,
+          };
+    else if (path.endsWith("/challenge")) data = challenge;
+    else if (path.endsWith("/orders") && options?.method === "POST") {
+      order = { ...challenge, id: orderId, status: "awaiting_payment" };
+      data = order;
+    } else if (path.includes("/orders?"))
+      data = { items: order ? [order] : [] };
+    else if (path.endsWith(`/orders/${orderId}`)) data = order;
+    else if (path.endsWith(`/${matchedId}`))
+      data = gas
+        ? { ...record, id: matchedId, user_eoa: owner }
+        : {
+            id: matchedId,
+            user_eoa: owner,
+            status: "waiting_account",
+            source_chain_id: 42161,
+            source_tx_hash: hash,
+          };
+    else
+      data = {
+        items:
+          order?.status === "matched" && gas
+            ? [{ ...record, id: matchedId, user_eoa: owner }]
+            : [],
+      };
+    return new Response(JSON.stringify({ data }));
+  });
+  m.simulate.mockResolvedValue({
+    result: true,
+    request: {
+      address: ARBITRUM_USDC,
+      abi: IERC20ABI,
+      functionName: "transfer",
+      args: [receiver, BigInt(raw)],
+    },
+  });
+  m.receipt.mockImplementation(async ({ hash: h }) =>
+    h === targetHash
+      ? { status: "success", to: owner }
+      : {
+          status: "success",
+          logs: [
+            {
+              address: ARBITRUM_USDC,
+              topics: encodeEventTopics({
+                abi: IERC20ABI,
+                eventName: "Transfer",
+                args: { from: owner, to: receiver },
+              }),
+              data: encodeAbiParameters([{ type: "uint256" }], [BigInt(raw)]),
+            },
+          ],
+        },
+  );
+  return {
+    signMessage,
+    challenge,
+    match: () => {
+      order = {
+        ...order,
+        status: "matched",
+        [gas ? "matched_top_up_id" : "matched_activation_id"]: matchedId,
+      };
+    },
+  };
+}
+it.each([true, false])(
+  "signs an order and transfers the exact standalone amount (gas=%s)",
+  async (gas) => {
+    const cfg = standalone(gas);
+    const api = paymentService(gas);
+    const balance = vi.fn(async () => 0n);
+    await startGasFunding(
+      cfg,
+      provider,
+      owner,
+      { ...port, nativeBalance: balance },
+      () => true,
+      () => port,
+    );
+    expect(api.signMessage).toHaveBeenCalledWith({
+      message: api.challenge.signing_message,
+    });
+    expect(m.write).toHaveBeenCalledWith(
+      expect.objectContaining({ args: [receiver, gas ? 3000000n : 1100000n] }),
+    );
+    expect(loadCreation(creationKey(cfg, owner))).toMatchObject({
+      flow: gas ? "gas_only" : "activation_only",
+      amountRaw: gas ? "3000000" : "1100000",
+      orderId,
+    });
+    if (!gas) expect(balance).not.toHaveBeenCalled();
+    expect((await fundingStatus(cfg, owner, 0n, [])).state).toBe("pending");
+    api.match();
+    expect(
+      (await fundingStatus(cfg, owner, gas ? 10000000000000000n : 0n, []))
+        .state,
+    ).toBe("idle");
+    expect(loadCreation(creationKey(cfg, owner))).toBeUndefined();
+  },
+);
+it("resumes the same order after transfer rejection without another order signature", async () => {
+  const cfg = standalone(false);
+  const api = paymentService(false);
+  m.write.mockRejectedValueOnce({ code: 4001 });
+  await expect(
+    startGasFunding(
+      cfg,
+      provider,
+      owner,
+      port,
+      () => true,
+      () => port,
+    ),
+  ).rejects.toMatchObject({ code: 4001 });
+  await startGasFunding(
+    cfg,
+    provider,
+    owner,
+    port,
+    () => true,
+    () => port,
+  );
+  expect(api.signMessage).toHaveBeenCalledOnce();
+});
+it.each(["receiver_address", "amount_raw", "flow", "signing_message"])(
+  "rejects a mismatched challenge field %s before signing",
+  async (field) => {
+    const cfg = standalone(false);
+    const api = paymentService(false);
+    Object.assign(api.challenge, {
+      [field]:
+        field === "receiver_address"
+          ? owner
+          : field === "amount_raw"
+            ? "3000000"
+            : field === "flow"
+              ? "gas_only"
+              : "malicious message",
+    });
+    await expect(
+      startGasFunding(
+        cfg,
+        provider,
+        owner,
+        port,
+        () => true,
+        () => port,
+      ),
+    ).rejects.toThrow();
+    expect(api.signMessage).not.toHaveBeenCalled();
+    expect(m.write).not.toHaveBeenCalled();
+  },
+);
+it("never transfers when the order signature is rejected", async () => {
+  const api = paymentService(false);
+  api.signMessage.mockRejectedValueOnce({ code: 4001 });
+  await expect(
+    startGasFunding(
+      standalone(false),
+      provider,
+      owner,
+      port,
+      () => true,
+      () => port,
+    ),
+  ).rejects.toMatchObject({ code: 4001 });
+  expect(m.write).not.toHaveBeenCalled();
+  expect(localStorage.length).toBe(0);
+});
+it("persists and restores a standalone Core activation payment", async () => {
+  const cfg = standalone(false, "testnet");
+  const api = paymentService(false, "core");
+  await startGasFunding(
+    cfg,
+    provider,
+    owner,
+    port,
+    () => true,
+    (submitting) => ({
+      ...port,
+      sendCore: async (to, amount) => {
+        submitting();
+        await m.core(to, amount);
+      },
+    }),
+  );
+  expect(m.core).toHaveBeenCalledWith(receiver, "1.1");
+  expect((await fundingStatus(cfg, owner, 0n, [])).state).toBe("pending");
+  api.match();
+  expect((await fundingStatus(cfg, owner, 0n, [])).state).toBe("idle");
+});
+it("blocks transfer if the payment order expires while the wallet is switching", async () => {
+  const cfg = standalone(false);
+  const api = paymentService(false);
+  const originalNow = Date.now();
+  let signatures = 0;
+  m.signer.mockImplementation(async () => {
+    if (++signatures === 4)
+      vi.spyOn(Date, "now").mockReturnValue(originalNow + 600001);
+    return { writeContract: m.write, signMessage: api.signMessage };
+  });
+  await expect(
+    startGasFunding(
+      cfg,
+      provider,
+      owner,
+      port,
+      () => true,
+      () => port,
+    ),
+  ).rejects.toMatchObject({ code: "ORDER_EXPIRED" });
+  expect(m.write).not.toHaveBeenCalled();
+});
+it("keeps an uncertain activation transfer locked until its order is matched", async () => {
+  const cfg = standalone(false);
+  const api = paymentService(false);
+  m.write.mockRejectedValueOnce(Error("Connection lost"));
+  await expect(
+    startGasFunding(
+      cfg,
+      provider,
+      owner,
+      port,
+      () => true,
+      () => port,
+    ),
+  ).rejects.toThrow("unknown");
+  await expect(
+    startGasFunding(
+      cfg,
+      provider,
+      owner,
+      port,
+      () => true,
+      () => port,
+    ),
+  ).rejects.toMatchObject({ code: "FUNDING_PENDING" });
+  expect((await fundingStatus(cfg, owner, 0n, [])).state).toBe("pending");
+  api.match();
+  expect((await fundingStatus(cfg, owner, 0n, [])).state).toBe("idle");
+  expect(m.write).toHaveBeenCalledOnce();
+});
+it("rejects a standalone activation receipt with the wrong transferred amount", async () => {
+  const cfg = standalone(false);
+  const api = paymentService(false);
+  await startGasFunding(
+    cfg,
+    provider,
+    owner,
+    port,
+    () => true,
+    () => port,
+  );
+  api.match();
+  const receipt = await m.receipt({ hash });
+  receipt.logs[0].data = encodeAbiParameters([{ type: "uint256" }], [3000000n]);
+  m.receipt.mockResolvedValue(receipt);
+  await expect(fundingStatus(cfg, owner, 0n, [])).rejects.toMatchObject({
+    code: "FUNDING_MISMATCH",
+  });
+  expect(loadCreation(creationKey(cfg, owner))).toBeDefined();
+});
+
+it("does not clear a newer payment when an old tracking request finishes late", async () => {
+  await start();
+  let deliver!: (receipt: unknown) => void;
+  m.receipt.mockImplementationOnce(async () => ({
+    status: "success",
+    logs: [
+      {
+        address: ARBITRUM_USDC,
+        topics: encodeEventTopics({
+          abi: IERC20ABI,
+          eventName: "Transfer",
+          args: { from: owner, to: receiver },
+        }),
+        data: encodeAbiParameters([{ type: "uint256" }], [3000000n]),
+      },
+    ],
+  }));
+  m.receipt.mockImplementationOnce(
+    () =>
+      new Promise((r) => {
+        deliver = r;
+      }),
+  );
+  const reading = fundingStatus(config, owner, 10000000000000000n, [record]);
+  await vi.waitFor(() => expect(deliver).toBeDefined());
+  const key = creationKey(config, owner);
+  const newer = {
+    ...loadCreation(key)!,
+    createdAt: Date.now() + 1000,
+    hash: targetHash,
+  };
+  localStorage.setItem(key, JSON.stringify(newer));
+  deliver({ status: "success", to: owner });
+  await reading;
+  expect(loadCreation(key)).toEqual(newer);
 });

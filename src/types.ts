@@ -41,10 +41,14 @@ export interface WidgetConfig {
   network: Network;
   rpcUrl?: string;
   arbitrumRpcUrl?: string;
-  /** Protocol Service used to verify successful 3 USDC gas top-ups. */
+  /** Protocol Service used to prepare and verify creation payments. */
   protocolServiceUrl?: string;
-  /** Skip creation payment history checks; still requires at least 0.01 HYPE. Defaults to false. */
+  /** Skip Gas payment history; enabled Gas conversion still requires 0.01 HYPE. Defaults to false. */
   skipCreationTopUpCheck?: boolean;
+  /** Enable creation Gas conversion and its HYPE balance requirement. Defaults to true. */
+  creationGasConversionEnabled?: boolean;
+  /** Enable activation funding before creation. Defaults to true. */
+  creationAccountActivationEnabled?: boolean;
   locale?: "en" | "zh";
   theme?: "light" | "dark";
   primaryColor?: string;
@@ -130,8 +134,14 @@ export interface WidgetOptions {
       reasons: string[];
     },
   ) => Promise<void>;
-  /** Optional override for built-in 3 USDC gas funding. Completion requires sufficient HYPE and, unless skipCreationTopUpCheck is enabled, Protocol Service payment history. */
-  onGasTopUp?: (context: EventContext & { owner: Address }) => Promise<void>;
+  /** Override the selected creation funding flow; completion is verified against its enabled requirements. */
+  onGasTopUp?: (
+    context: EventContext & {
+      owner: Address;
+      flow?: "combined" | "gas_only" | "activation_only" | "none";
+      amountRaw?: string;
+    },
+  ) => Promise<void>;
   onEvent?: (event: WidgetEvent) => void;
 }
 export interface Balances {

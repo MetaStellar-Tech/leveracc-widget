@@ -95,3 +95,31 @@ it("validates and defaults the creation history opt-out", () => {
     ).toThrow("must be a boolean");
   }
 });
+
+it("defaults independent creation flags and distinguishes legacy configurations", () => {
+  const base = {
+    network: "mainnet" as const,
+    projectId: `0x${"ab".repeat(32)}` as const,
+  };
+  expect(resolveConfig(base)).toMatchObject({
+    creationLegacyMode: true,
+    creationGasConversionEnabled: true,
+    creationAccountActivationEnabled: true,
+  });
+  expect(
+    resolveConfig({ ...base, creationGasConversionEnabled: false }),
+  ).toMatchObject({
+    creationLegacyMode: false,
+    creationGasConversionEnabled: false,
+    creationAccountActivationEnabled: true,
+  });
+  for (const key of [
+    "creationGasConversionEnabled",
+    "creationAccountActivationEnabled",
+  ]) {
+    for (const value of [null, "false", 0])
+      expect(() => resolveConfig({ ...base, [key]: value })).toThrow(
+        "must be a boolean",
+      );
+  }
+});

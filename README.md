@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-[npm integration](docs/NPM_INTEGRATION.md) · [Wallet integration](docs/WALLET_INTEGRATION.md) · [Release process](docs/RELEASING.md) · [Standalone npm example](examples/npm/README.md)
+[npm integration](docs/NPM_INTEGRATION.md) · [Wallet integration](docs/WALLET_INTEGRATION.md) · [Release process](docs/RELEASING.md) · [Standalone npm example](examples/npm/README.md) · [Creation configuration](#creation-gas-conversion-and-activation)
 
 A standalone React / JavaScript account and lending widget that uses an integrator-provided EIP-1193 wallet. **No v1 API, login session, cookies, or backend account registration is required.** The Factory and on-chain state are the source of truth for accounts. Core balances are queried through the protocol read adapter, and the initial deposit relay is signed through the Hyperliquid SDK.
 
@@ -106,7 +106,9 @@ Without a build tool, host `dist/widget.js` and use the global `LeverAcc.mountLe
 | `projectId` | Required bytes32 | Registered project ID |
 | `network` | Required `mainnet` / `testnet` | HyperEVM 999 / 998, paired with the corresponding Core network |
 | `protocolServiceUrl` | Network preset | Protocol Service URL for querying top-up history before account creation |
-| `skipCreationTopUpCheck` | `false` | Skip the creation 3 USDC payment history check; still requires at least 0.01 HYPE in the Fund wallet; boolean only |
+| `creationGasConversionEnabled` | `true` | Enable creation Gas conversion and the fixed HYPE minimum; boolean only |
+| `creationAccountActivationEnabled` | `true` | Enable activation funding requirements before creation; boolean only |
+| `skipCreationTopUpCheck` | `false` | Skip Gas payment history; HYPE is required when Gas conversion is enabled; see compatibility rules below; boolean only |
 | `rpcUrl` | Network preset | HyperEVM RPC for the same network |
 | `arbitrumRpcUrl` | Network-matched Arbitrum preset | Arbitrum One (42161) on mainnet; Arbitrum Sepolia (421614) on testnet |
 | `locale`                      | `en`                       | `en` / `zh`                                                              |
@@ -119,9 +121,40 @@ Without a build tool, host `dist/widget.js` and use the global `LeverAcc.mountLe
 | `borrow.expiryWindowSeconds` | `900` | Intent validity period, 1–3600 seconds |
 | `arbitrumWithdrawalEnabled` | `true` | Both networks; confirm the deployment supports Circle forwarding |
 
-With `config.skipCreationTopUpCheck: true`, creation checks only that the Fund wallet (owner EOA) has at least 0.01 HYPE on the current network’s HyperEVM, without requesting payment history when no built-in payment is pending. History service failures do not block creation, but insufficient balances or balance read failures do. Built-in 3 USDC funding and `onGasTopUp` remain available when gas is insufficient; built-in funding requires available route configuration. Sufficient gas skips funding and the callback. Configuration changes invalidate old checks. Creation does not imply activation: the project handles subsequent activation checks. Existing signature, ownership, project binding, and subsequent operation checks remain in place. See the [wallet integration example](docs/WALLET_INTEGRATION.md).
+When neither new creation switch is supplied, with `config.skipCreationTopUpCheck: true`, creation checks only that the Fund wallet (owner EOA) has at least 0.01 HYPE on the current network’s HyperEVM, without requesting payment history when no built-in payment is pending. History service failures do not block creation, but insufficient balances or balance read failures do. Built-in 3 USDC funding and `onGasTopUp` remain available when gas is insufficient; built-in funding requires available route configuration. Sufficient gas skips funding and the callback. Configuration changes invalidate old checks. Creation does not imply activation: the project handles subsequent activation checks. Existing signature, ownership, project binding, and subsequent operation checks remain in place. See the [wallet integration example](docs/WALLET_INTEGRATION.md).
 
 The legacy `apiBaseUrl`, `indexerUrl`, and `defaultTab` options have been removed; `protocolServiceUrl` queries top-up records before account creation. The entry area does not automatically open operation modals. Disabling a feature closes its modal and prevents new signatures and submissions through the controller; already submitted transactions continue to be tracked.
+
+### Creation Gas conversion and activation
+
+Configure `creationGasConversionEnabled` and `creationAccountActivationEnabled` independently. Both accept only booleans and default to `true`.
+
+| Gas conversion | Account activation | Preparation |
+| --- | --- | --- |
+| `true` | `true` | One combined 3 USDC transfer |
+| `true` | `false` | Independent 3 USDC Gas conversion |
+| `false` | `true` | Independent 1.1 USDC activation payment |
+| `false` | `false` | Proceed directly to account creation |
+
+For activation only:
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "en",
+  creationGasConversionEnabled: false,
+  creationAccountActivationEnabled: true,
+} as const;
+```
+
+When Gas conversion is disabled, neither the creation readiness check nor account submission enforces the fixed 0.01 HYPE minimum. Actual transaction simulation and wallet transaction checks still apply. Disabled functions do not require their eligibility queries. Both switches off permits creation without a payment service; previously submitted payments remain stored and are reconciled separately without blocking eligibility for disabled functions.
+
+Omitting both new switches preserves the complete legacy behavior, including `skipCreationTopUpCheck: true` checking only HYPE. Once either switch is explicitly supplied, the other defaults to `true` and `skipCreationTopUpCheck` skips only Gas payment history; it never skips enabled activation preparation. Gas-only mode reads `/api/v1/gas-conversions`, activation-only mode reads `/api/v1/account-activations`, and combined mode continues to use `/api/v1/gas-top-ups`. Explicit combined mode checks activation allocation in successful service records. Gas-only records cannot establish combined activation eligibility.
+
+The modal keeps the existing preparation and creation steps, button placement, and automatic polling. Copy and amounts follow the selected mode, and both-off mode shows that no preparation is needed. There is no end-user mode selector. Mainnet uses Arbitrum USDC; testnet uses HyperCore Spot.
+
+See [order and recovery details in the wallet integration guide](docs/WALLET_INTEGRATION.md#creation-gas-conversion-and-activation).
 
 ### Network deployments for third-party integrations
 
@@ -195,7 +228,7 @@ Default modals follow the adjacent dapp's visual conventions and operation steps
 - Withdraw: Fund or Trade is the source, and the owner's Arbitrum wallet is the destination. Fund approves Circle before bridging. Trade is enabled by default and can be disabled with `arbitrumWithdrawalEnabled: false`; if necessary, it first replenishes Trade EVM from Core Spot, then explicitly continues bridging. Submission is blocked when contract limits prevent transferring the full amount.
 - Fund ↔ Trade remains in the transfer entry, and historical internal withdrawal records are not restored. Existing underlying methods have not been removed; `TransferRoute` adds `fundToArbitrum`.
 - Quotes appear in the form and fee increases require another confirmation. Approval emits `operationSubmitted` with `action: "bridgeApproval"`; this proves neither effective allowance nor withdrawal arrival.
-- Built-in funding requires 3 USDC on the source network and Arbitrum ETH for mainnet gas. Pending transfers are restored and cannot be sent again. Funding status uses the service polling interval, defaulting to 5 seconds. Direct HYPE does not replace historical funding eligibility unless `skipCreationTopUpCheck` is enabled. A pending built-in payment is still tracked through service records even with this option enabled.
+- Default combined funding requires 3 USDC on the source network and Arbitrum ETH for mainnet gas. Pending transfers are restored and cannot be sent again. Funding status uses the service polling interval, defaulting to 5 seconds. Direct HYPE does not replace historical funding eligibility unless `skipCreationTopUpCheck` is enabled. A pending built-in payment is still tracked through service records even with this option enabled.
 
 Visual comparisons use real components from the reference repository with fixed test data, without starting its backend or modifying that repository:
 

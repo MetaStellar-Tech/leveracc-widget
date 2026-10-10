@@ -2,6 +2,12 @@ import type { Address } from "viem";
 import { invariant } from "../core/errors";
 
 export interface GasTopUpRecord {
+  user_eoa?: string;
+  cost_breakdown?: {
+    activation_required: boolean;
+    activation_fee_reserved_usdc_amount_raw: string;
+    activation_transfer_reserved_usdc_amount_raw: string;
+  };
   id?: string;
   created_at?: string;
   next_poll_after_seconds?: number;

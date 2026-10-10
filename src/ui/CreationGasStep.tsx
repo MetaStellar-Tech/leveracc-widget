@@ -3,6 +3,7 @@ import type { en } from "./strings";
 
 export function CreationGasStep({
   source,
+  activationOnly = false,
   t,
   disabled,
   submitting,
@@ -11,6 +12,7 @@ export function CreationGasStep({
   onFund,
 }: {
   source: "Arbitrum" | "HyperCore";
+  activationOnly?: boolean;
   t: typeof en;
   disabled: boolean;
   submitting: boolean;
@@ -19,7 +21,9 @@ export function CreationGasStep({
   onFund: () => void;
 }) {
   const text = (value: string) =>
-    value.replaceAll("{amount}", "3").replaceAll("{source}", source);
+    value
+      .replaceAll("{amount}", activationOnly ? "1.1" : "3")
+      .replaceAll("{source}", source);
   if (failure)
     return (
       <p role="alert" className="error-text">
@@ -37,11 +41,11 @@ export function CreationGasStep({
     <div className="creation-gas">
       <p>{text(t.gasFundingDescription)}</p>
       <div className="creation-gas-route">
-        <strong>3 USDC</strong>
+        <strong>{activationOnly ? "1.1" : "3"} USDC</strong>
         <span>{source}</span>
         <Icon name="right" size={14} />
-        <strong>HYPE</strong>
-        <span>HyperEVM</span>
+        <strong>{activationOnly ? t.tradingAccount : "HYPE"}</strong>
+        <span>{activationOnly ? "HyperCore" : "HyperEVM"}</span>
       </div>
       <div className="creation-gas-info">
         <Icon name="info" size={14} />

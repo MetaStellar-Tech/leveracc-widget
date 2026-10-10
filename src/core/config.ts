@@ -71,6 +71,19 @@ export function resolveConfig(input: WidgetConfig) {
     "INVALID_CONFIG",
     "skipCreationTopUpCheck must be a boolean.",
   );
+  for (const name of [
+    "creationGasConversionEnabled",
+    "creationAccountActivationEnabled",
+  ] as const) {
+    invariant(
+      input[name] === undefined || typeof input[name] === "boolean",
+      "INVALID_CONFIG",
+      `${name} must be a boolean.`,
+    );
+  }
+  const creationLegacyMode =
+    input.creationGasConversionEnabled === undefined &&
+    input.creationAccountActivationEnabled === undefined;
   const preset = presets[input.network];
   const borrow = {
     termSeconds: 604800,
@@ -123,6 +136,10 @@ export function resolveConfig(input: WidgetConfig) {
           : "https://protocol-service-testnet.leveracc.xyz"),
     ),
     skipCreationTopUpCheck: input.skipCreationTopUpCheck ?? false,
+    creationLegacyMode,
+    creationGasConversionEnabled: input.creationGasConversionEnabled ?? true,
+    creationAccountActivationEnabled:
+      input.creationAccountActivationEnabled ?? true,
     locale: input.locale ?? "en",
     theme: input.theme ?? "dark",
     primaryColor: input.primaryColor ?? "#0099ff",

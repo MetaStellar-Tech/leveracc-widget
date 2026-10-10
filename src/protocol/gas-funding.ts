@@ -1,3 +1,11 @@
+import { creationFlow, creationAmount } from "./creation-policy";
+import {
+  paymentRequest,
+  paymentList,
+  prepareOrder,
+  combinedActivationReady,
+  listConversions,
+} from "./creation-payments";
 import {
   creationKey,
   loadCreation,
@@ -31,6 +39,7 @@ const limits = z.object({
 });
 const configSchema = limits.extend({
   enabled: z.boolean().optional(),
+  account_activation_enabled: z.boolean().optional(),
   system_core_account_address: z.string().optional(),
   arbitrum: limits
     .extend({
@@ -43,9 +52,90 @@ const configSchema = limits.extend({
     })
     .optional(),
 });
-export async function gasFundingRoute(config: ResolvedConfig) {
+export async function gasFundingRoute(config: ResolvedConfig, owner?: Address) {
+  const flow = creationFlow(config);
+  if (flow === "activation_only") {
+    invariant(owner, "WALLET_NOT_CONNECTED", "Connect a wallet first.");
+    const data = z
+      .object({
+        enabled: z.boolean(),
+        status: z.string(),
+        payment_usdc_amount_raw: amount,
+        activation_receiver_address: address.optional(),
+        arbitrum: z
+          .object({
+            enabled: z.boolean(),
+            chain_id: z.number(),
+            usdc_address: z.string(),
+          })
+          .optional(),
+      })
+      .parse(await paymentRequest(config, flow, `/config?user_eoa=${owner}`));
+    invariant(
+      data.enabled && data.payment_usdc_amount_raw === "1100000",
+      "GAS_ROUTE_UNAVAILABLE",
+      "Account activation is unavailable.",
+    );
+    let receiver = data.activation_receiver_address;
+    if (data.status === "activation_pending") {
+      const orders = await paymentList(config, flow, owner, "/orders");
+      const active = orders
+        .map((o) =>
+          z
+            .object({
+              status: z.string(),
+              expires_at: z.string(),
+              source: z.string(),
+              receiver_address: address,
+            })
+            .parse(o),
+        )
+        .filter(
+          (o) =>
+            o.status === "awaiting_payment" &&
+            Date.parse(o.expires_at) > Date.now() &&
+            o.source === (config.network === "mainnet" ? "arbitrum" : "core"),
+        );
+      invariant(
+        active.length === 1,
+        "FUNDING_PENDING",
+        "Activation payment is already pending.",
+      );
+      receiver = active[0].receiver_address;
+    } else
+      invariant(
+        data.status === "ready_to_pay",
+        "GAS_ROUTE_UNAVAILABLE",
+        "Account is not ready for activation payment.",
+      );
+    if (config.network === "mainnet")
+      invariant(
+        data.arbitrum?.enabled &&
+          data.arbitrum.chain_id === arbitrum.id &&
+          data.arbitrum.usdc_address.toLowerCase() ===
+            ARBITRUM_USDC.toLowerCase(),
+        "GAS_ROUTE_UNAVAILABLE",
+        "Arbitrum activation is unavailable.",
+      );
+    return {
+      source:
+        config.network === "mainnet"
+          ? ("arbitrum" as const)
+          : ("core" as const),
+      receiver: address.parse(receiver) as Address,
+    };
+  }
   const data = configSchema.parse(
-    await gasTopUpRequest(config.protocolServiceUrl, "/config"),
+    flow === "gas_only"
+      ? await paymentRequest(config, flow, "/config")
+      : await gasTopUpRequest(config.protocolServiceUrl, "/config"),
+  );
+  invariant(
+    config.creationLegacyMode ||
+      flow !== "combined" ||
+      data.account_activation_enabled === true,
+    "GAS_ROUTE_UNAVAILABLE",
+    "Combined account activation funding is unavailable.",
   );
   const route = config.network === "mainnet" ? data.arbitrum : data;
   invariant(
@@ -91,6 +181,11 @@ export async function startGasFunding(
   current: () => boolean,
   corePort: (submitting: () => void) => ProtocolPort,
 ) {
+  const flow = creationFlow(config);
+  if (flow === "none") return;
+  const amountRaw = creationAmount(flow);
+  const fundingAmount = BigInt(amountRaw);
+  const displayAmount = flow === "activation_only" ? "1.1" : "3";
   const key = creationKey(config, owner);
   invariant(
     !loadCreation(key),
@@ -98,21 +193,57 @@ export async function startGasFunding(
     "Gas funding is already pending. Do not send again.",
   );
   const [history, hypeBefore] = await Promise.all([
-    config.skipCreationTopUpCheck
+    flow === "activation_only" ||
+    (config.skipCreationTopUpCheck &&
+      (config.creationLegacyMode || flow === "gas_only"))
       ? []
-      : listGasTopUps(config.protocolServiceUrl, owner),
-    port.nativeBalance(owner),
+      : flow === "gas_only"
+        ? listConversions(config, owner)
+        : listGasTopUps(config.protocolServiceUrl, owner),
+    config.creationGasConversionEnabled
+      ? port.nativeBalance(owner)
+      : Promise.resolve(0n),
   ]);
   if (
+    flow !== "activation_only" &&
     (config.skipCreationTopUpCheck || history.some(isCreationTopUp)) &&
+    (config.creationLegacyMode ||
+      flow !== "combined" ||
+      (await combinedActivationReady(config, owner, history))) &&
     hypeBefore >= CREATION_GAS_MINIMUM
   )
     return;
-  const route = await gasFundingRoute(config);
+  const route = await gasFundingRoute(config, owner);
+  let orderId: string | undefined;
+  let orderExpires = Infinity;
+  const ensureOrder = async () => {
+    if (flow !== "combined") {
+      const order = await prepareOrder(
+        config,
+        provider,
+        owner,
+        flow,
+        route.source,
+        route.receiver,
+        current,
+      );
+      orderId = order.id;
+      orderExpires = Date.parse(order.expires_at);
+    }
+    invariant(current(), "CONTEXT_CHANGED", "Wallet context changed.");
+  };
   let submitting = false;
   const markSubmitting = () => {
+    invariant(
+      orderExpires > Date.now() + 30000,
+      "ORDER_EXPIRED",
+      "Payment order has expired. Retry before sending funds.",
+    );
     invariant(current(), "CONTEXT_CHANGED", "Wallet context changed.");
     saveCreation(key, {
+      flow,
+      amountRaw,
+      orderId,
       source: route.source,
       receiver: route.receiver,
       hypeBefore: hypeBefore.toString(),
@@ -129,12 +260,13 @@ export async function startGasFunding(
       });
       const balance = await readOwnerCore(port, registry, owner);
       invariant(
-        balance.available >= GAS_FUNDING_AMOUNT,
+        balance.available >= fundingAmount,
         "INSUFFICIENT_BALANCE",
-        "At least 3 USDC is required in HyperCore Spot.",
+        `At least ${displayAmount} USDC is required in HyperCore Spot.`,
       );
       // sendCore checks owner and network before signing and again before broadcast.
-      await corePort(markSubmitting).sendCore(route.receiver, "3");
+      await ensureOrder();
+      await corePort(markSubmitting).sendCore(route.receiver, displayAmount);
       return { source: route.source };
     } else {
       const client = publicRpc(arbitrum, config.arbitrumRpcUrl);
@@ -147,7 +279,7 @@ export async function startGasFunding(
         address: ARBITRUM_USDC,
         abi: IERC20ABI,
         functionName: "transfer" as const,
-        args: [route.receiver, GAS_FUNDING_AMOUNT] as const,
+        args: [route.receiver, fundingAmount] as const,
         account: owner,
       };
       const balance = await client.readContract({
@@ -156,9 +288,9 @@ export async function startGasFunding(
         args: [owner],
       });
       invariant(
-        balance >= GAS_FUNDING_AMOUNT,
+        balance >= fundingAmount,
         "INSUFFICIENT_BALANCE",
-        "At least 3 USDC is required on Arbitrum.",
+        `At least ${displayAmount} USDC is required on Arbitrum.`,
       );
       await signer(provider, owner, arbitrum, current);
       const [simulation, gas, price, eth] = await Promise.all([
@@ -177,6 +309,7 @@ export async function startGasFunding(
         "INSUFFICIENT_GAS",
         "Insufficient ETH for Arbitrum gas.",
       );
+      await ensureOrder();
       const wallet = await signer(provider, owner, arbitrum, current);
       markSubmitting();
       const hash = await wallet.writeContract({
@@ -188,6 +321,9 @@ export async function startGasFunding(
       saveCreation(
         key,
         {
+          flow,
+          amountRaw,
+          orderId,
           source: route.source,
           hash,
           receiver: route.receiver,

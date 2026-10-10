@@ -87,6 +87,8 @@ Pass a connected JSON-RPC WalletClient. This browser integration does not suppor
 
 ## Project authorization and gas services
 
+The following describes the compatible flow when neither new creation switch is supplied. For independent modes, see [Creation Gas conversion and activation](#creation-gas-conversion-and-activation).
+
 Connecting a wallet does not grant project trading authorization. Creating an LAAccount does not automatically authorize a project Execution Wallet or configure a Risk Wallet. The project operator must implement those operations according to its own service contract; wagmi / Privy cannot provide project signatures themselves.
 
 The default Quick Borrow dialog does not display account setup instructions or an account setup button. The host application must provide its own account setup flow. `onAccountSetup` and the controller’s `setupAccount()` remain available for compatibility, but the default dialog does not invoke them. Borrowing remains blocked until the on-chain prerequisites are met.
@@ -139,6 +141,43 @@ When `onGasTopUp` is not configured:
 - Browser storage must work before broadcast so pending transfers can be restored. Local records never establish eligibility; direct HYPE replaces the historical 3 USDC record requirement only with `skipCreationTopUpCheck`. Already pending built-in payments still query service records for tracking.
 
 When `onGasTopUp` is configured, the host flow is used, followed by the same service and gas checks. The host flow must generate compatible top-up records unless `skipCreationTopUpCheck` is enabled; in that mode only the gas balance is checked.
+
+### Creation Gas conversion and activation
+
+Configure `creationGasConversionEnabled` and `creationAccountActivationEnabled` independently. Both accept only booleans and default to `true`.
+
+| Gas conversion | Account activation | Preparation |
+| --- | --- | --- |
+| `true` | `true` | One combined 3 USDC transfer |
+| `true` | `false` | Independent 3 USDC Gas conversion |
+| `false` | `true` | Independent 1.1 USDC activation payment |
+| `false` | `false` | Proceed directly to account creation |
+
+For activation only:
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "en",
+  creationGasConversionEnabled: false,
+  creationAccountActivationEnabled: true,
+} as const;
+```
+
+When Gas conversion is disabled, neither the creation readiness check nor account submission enforces the fixed 0.01 HYPE minimum. Actual transaction simulation and wallet transaction checks still apply. Disabled functions do not require their eligibility queries. Both switches off permits creation without a payment service; previously submitted payments remain stored and are reconciled separately without blocking eligibility for disabled functions.
+
+Omitting both new switches preserves the complete legacy behavior, including `skipCreationTopUpCheck: true` checking only HYPE. Once either switch is explicitly supplied, the other defaults to `true` and `skipCreationTopUpCheck` skips only Gas payment history; it never skips enabled activation preparation. Gas-only mode reads `/api/v1/gas-conversions`, activation-only mode reads `/api/v1/account-activations`, and combined mode continues to use `/api/v1/gas-top-ups`. Explicit combined mode checks activation allocation in successful service records. Gas-only records cannot establish combined activation eligibility.
+
+The modal keeps the existing preparation and creation steps, button placement, and automatic polling. Copy and amounts follow the selected mode, and both-off mode shows that no preparation is needed. There is no end-user mode selector. Mainnet uses Arbitrum USDC; testnet uses HyperCore Spot.
+
+Independent modes require an additional wallet message signature: fetch route configuration and `/orders/challenge`, validate the payer, flow, source, receiver, amount, nonce, expiry and signing message, sign it, then POST `/orders` before transferring. The endpoint prefix is `/api/v1/gas-conversions` or `/api/v1/account-activations`. Allow cross-origin GET and JSON POST requests to the service. Combined mode retains the existing direct transfer without an order signature.
+
+A created order is not payment confirmation. The widget queries `/orders/{intent_id}` and its `matched_top_up_id` or `matched_activation_id`. Activation statuses `waiting_account`, `submitting`, and `activated` satisfy creation preparation; `waiting_account` means payment is confirmed and fulfillment awaits account creation. The service can also confirm `already_activated`. An unpaid order or general `activation_pending` status alone does not unlock creation. Activation-only never waits for HYPE delivery or final activation before creating the account. Gas conversion requires at least 0.01 HYPE and successful conversion evidence; only the evidence requirement can be skipped with the history opt-out.
+
+Pending payment records retain flow, amount, order ID, associated record ID and transfer identity; old records restore as combined payments. An unexpired order can be recovered from the service after reopening or rejecting a transfer. Expiring orders must expire before replacement; never send against an expired order. Unknown transfer outcomes remain locked until reconciled, even if the order expires. Wallet, network, service or switch changes invalidate stale readiness checks. Cross-tab locks prevent concurrent payment submissions. Creation submission rechecks the same requirements as the modal.
+
+`topUpGas()` and `onGasTopUp` remain available. The callback receives optional `flow` (`combined`, `gas_only`, `activation_only`, or `none`) and `amountRaw` fields describing the selected preparation. It overrides funding for the selected mode and must produce matching service evidence. Both-off mode skips the callback. Callback resolution alone never establishes payment eligibility.
 
 ## Verification coverage
 

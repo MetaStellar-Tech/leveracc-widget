@@ -1,3 +1,9 @@
+import { creationFlow, creationAmount } from "../protocol/creation-policy";
+import {
+  listConversions,
+  activationEligibility,
+  combinedActivationReady,
+} from "../protocol/creation-payments";
 import {
   fundingStatus,
   creationKey,
@@ -192,7 +198,13 @@ export class WidgetController {
           account: context.account!,
           reasons: [...this.state.reasons],
         });
-      else await this.options.onGasTopUp!({ ...context, owner: context.owner });
+      else
+        await this.options.onGasTopUp!({
+          ...context,
+          owner: context.owner,
+          flow: creationFlow(this.config),
+          amountRaw: creationAmount(creationFlow(this.config)),
+        });
       if (generation === this.generation) await this.refresh();
     } catch (error) {
       if (generation === this.generation) this.report(error, context);
@@ -202,6 +214,7 @@ export class WidgetController {
   }
   setupAccount = () => this.hostAction("setup");
   topUpGas = async () => {
+    if (creationFlow(this.config) === "none") return;
     if (this.state.owner)
       invariant(
         !loadCreation(creationKey(this.config, this.state.owner)),
@@ -331,7 +344,12 @@ export class WidgetController {
       resolved.rpcUrl !== this.config.rpcUrl ||
       resolved.arbitrumRpcUrl !== this.config.arbitrumRpcUrl ||
       resolved.protocolServiceUrl !== this.config.protocolServiceUrl ||
-      resolved.skipCreationTopUpCheck !== this.config.skipCreationTopUpCheck;
+      resolved.skipCreationTopUpCheck !== this.config.skipCreationTopUpCheck ||
+      resolved.creationGasConversionEnabled !==
+        this.config.creationGasConversionEnabled ||
+      resolved.creationAccountActivationEnabled !==
+        this.config.creationAccountActivationEnabled ||
+      resolved.creationLegacyMode !== this.config.creationLegacyMode;
     this.detach();
     this.options = next;
     this.config = resolved;
@@ -791,12 +809,27 @@ export class WidgetController {
     this.patch({
       creationFundingPending: Boolean(loadCreation(creationKey(config, owner))),
     });
-    const [gas, records] = await Promise.all([
-      this.port(config, owner, undefined, generation).nativeBalance(owner),
-      config.skipCreationTopUpCheck && !loadCreation(creationKey(config, owner))
-        ? []
-        : listGasTopUps(config.protocolServiceUrl, owner),
+    const flow = creationFlow(config);
+    const pending = loadCreation(creationKey(config, owner));
+    const needsHistory =
+      flow !== "none" &&
+      flow !== "activation_only" &&
+      (!config.skipCreationTopUpCheck ||
+        (!config.creationLegacyMode && flow === "combined"));
+    const [gas, records, activations] = await Promise.all([
+      config.creationGasConversionEnabled
+        ? this.port(config, owner, undefined, generation).nativeBalance(owner)
+        : Promise.resolve(0n),
+      needsHistory
+        ? flow === "gas_only"
+          ? listConversions(config, owner)
+          : listGasTopUps(config.protocolServiceUrl, owner)
+        : Promise.resolve([]),
+      flow === "activation_only"
+        ? activationEligibility(config, owner)
+        : Promise.resolve(false),
     ]);
+    const eligibilityRecords = records;
     invariant(
       generation === this.generation &&
         !this.disposed &&
@@ -804,7 +837,26 @@ export class WidgetController {
       "CONTEXT_CHANGED",
       "Wallet context changed.",
     );
-    const funding = await fundingStatus(config, owner, gas, records);
+    const pendingRelevant = !!pending && (pending.flow ?? "combined") === flow;
+    let funding = {
+      state: "idle",
+      error: undefined as string | undefined,
+      pollAfter: 5000,
+    };
+    const trackFunding = async () => {
+      const trackingRecords =
+        pending &&
+        (pending.flow ?? "combined") === "combined" &&
+        (!needsHistory || flow !== "combined")
+          ? await listGasTopUps(config.protocolServiceUrl, owner)
+          : records;
+      return fundingStatus(config, owner, gas, trackingRecords);
+    };
+    if (pendingRelevant) funding = await trackFunding();
+    else if (pending) {
+      // Reconcile an older flow without holding up disabled requirements.
+      void trackFunding().catch(() => {});
+    }
     invariant(
       generation === this.generation &&
         !this.disposed &&
@@ -816,9 +868,28 @@ export class WidgetController {
     const creating = Boolean(
       loadCreation(creationKey(config, owner, "create")),
     );
-    const hasTopUp = records.some(isCreationTopUp);
+    const hasTopUp = eligibilityRecords.some(isCreationTopUp);
+    const gasReady =
+      !config.creationGasConversionEnabled ||
+      ((config.skipCreationTopUpCheck || hasTopUp) &&
+        gas >= CREATION_GAS_MINIMUM);
+    const activationSatisfied =
+      config.creationLegacyMode ||
+      !config.creationAccountActivationEnabled ||
+      (flow === "activation_only"
+        ? activations
+        : await combinedActivationReady(config, owner, eligibilityRecords));
+    invariant(
+      generation === this.generation &&
+        !this.disposed &&
+        same(owner, this.state.owner),
+      "CONTEXT_CHANGED",
+      "Wallet context changed.",
+    );
     return {
       gas,
+      flow,
+      activationSatisfied,
       hasTopUp,
       funding,
       creating,
@@ -826,8 +897,8 @@ export class WidgetController {
         funding.state === "idle" &&
         !funding.error &&
         !creating &&
-        (config.skipCreationTopUpCheck || hasTopUp) &&
-        gas >= CREATION_GAS_MINIMUM,
+        gasReady &&
+        activationSatisfied,
     };
   }
   createAccount = () =>
@@ -839,15 +910,22 @@ export class WidgetController {
       );
       if (!same(await primary(port, config, owner), zeroAddress)) return;
       const readiness = await this.creationReadiness();
-      invariant(
-        config.skipCreationTopUpCheck || readiness.hasTopUp,
-        "CREATION_TOP_UP_REQUIRED",
-        "A successful 3 USDC gas top-up is required before creating the account.",
-      );
+      if (config.creationGasConversionEnabled) {
+        invariant(
+          config.skipCreationTopUpCheck || readiness.hasTopUp,
+          "CREATION_TOP_UP_REQUIRED",
+          "A successful 3 USDC gas top-up is required before creating the account.",
+        );
+        invariant(
+          readiness.gas >= CREATION_GAS_MINIMUM,
+          "INSUFFICIENT_GAS",
+          "Fund your owner wallet with at least 0.01 HYPE before creating the account.",
+        );
+      }
       invariant(
         readiness.ready,
-        "INSUFFICIENT_GAS",
-        "Fund your owner wallet with at least 0.01 HYPE before creating the account.",
+        "CREATION_REQUIREMENTS_NOT_MET",
+        "Complete the enabled account preparation requirements before creating the account.",
       );
       await createAccount(port, config, owner);
     });

@@ -1,3 +1,12 @@
+import type { CreationFlow } from "./creation-policy";
+import {
+  getOrder,
+  validateOrder,
+  paymentRequest,
+  activationSchema,
+  activationReady,
+  listConversions,
+} from "./creation-payments";
 import {
   TransactionReceiptNotFoundError,
   decodeEventLog,
@@ -16,6 +25,10 @@ import {
 } from "./gas-top-ups";
 
 export interface PendingCreation {
+  flow?: CreationFlow;
+  amountRaw?: string;
+  orderId?: string;
+  recordId?: string;
   source: "arbitrum" | "core" | "create";
   hash?: Hex;
   receiver: Address;
@@ -65,6 +78,16 @@ export function loadCreation(key: string): PendingCreation | undefined {
     "INVALID_PENDING_CREATION",
     "Unable to read the pending creation transaction.",
   );
+  invariant(
+    (value.flow === undefined ||
+      ["combined", "gas_only", "activation_only"].includes(value.flow)) &&
+      (value.amountRaw === undefined ||
+        value.amountRaw ===
+          (value.flow === "activation_only" ? "1100000" : "3000000")) &&
+      (value.orderId === undefined || /^[a-f0-9-]{36}$/i.test(value.orderId)),
+    "INVALID_PENDING_CREATION",
+    "Unable to read pending payment details.",
+  );
   if (value.source === "create" && !value.hash) {
     try {
       localStorage.removeItem(key);
@@ -93,14 +116,79 @@ export async function fundingStatus(
     pollAfter: 5000,
   };
   if (!pending) return idle;
+  const ownsPending = () => {
+    const active = loadCreation(key);
+    return (
+      active?.createdAt === pending.createdAt &&
+      active.source === pending.source &&
+      active.receiver === pending.receiver &&
+      active.orderId === pending.orderId &&
+      (active.flow ?? "combined") === (pending.flow ?? "combined")
+    );
+  };
+  const updatePending = (value: PendingCreation, submitted = false) => {
+    if (ownsPending()) saveCreation(key, value, submitted);
+  };
+  const finishPending = () => {
+    if (ownsPending()) clearCreation(key);
+  };
+  const flow = pending.flow ?? "combined";
+  const amountRaw = pending.amountRaw ?? "3000000";
+  let order;
+  if (flow !== "combined") {
+    invariant(
+      pending.orderId,
+      "INVALID_PENDING_CREATION",
+      "Missing payment order.",
+    );
+    order = await getOrder(config, flow, pending.orderId);
+    validateOrder(order, owner, flow, pending.source, pending.receiver);
+    if (order.status === "manual_review")
+      return {
+        state: "failed",
+        error:
+          order.last_error || "Payment requires review. Do not send again.",
+        pollAfter: 5000,
+      };
+    const recordId =
+      flow === "gas_only"
+        ? order.matched_top_up_id
+        : order.matched_activation_id;
+    if (recordId) {
+      invariant(
+        !pending.recordId || pending.recordId === recordId,
+        "FUNDING_MISMATCH",
+        "Payment association changed.",
+      );
+      if (!pending.recordId) updatePending({ ...pending, recordId }, true);
+    }
+    if (flow === "gas_only") records = await listConversions(config, owner);
+  }
   const waiting = { ...idle, state: "pending" };
   let record: GasTopUpRecord | undefined;
   if (pending.source === "arbitrum") {
     if (!pending.hash) {
+      if (flow === "activation_only" && order?.matched_activation_id) {
+        const activation = activationSchema.parse(
+          await paymentRequest(config, flow, `/${order.matched_activation_id}`),
+        );
+        invariant(
+          activation.user_eoa.toLowerCase() === owner.toLowerCase(),
+          "FUNDING_MISMATCH",
+          "Activation owner mismatch.",
+        );
+        if (activation.source_chain_id === 42161 && activation.source_tx_hash) {
+          updatePending({
+            ...pending,
+            hash: activation.source_tx_hash as Hex,
+          });
+          return fundingStatus(config, owner, gas, records);
+        }
+      }
       const candidates = records.filter(
         (r) =>
           r.source_chain_id === 42161 &&
-          r.requested_usdc_amount_raw === "3000000" &&
+          r.requested_usdc_amount_raw === amountRaw &&
           r.created_at &&
           Date.parse(r.created_at) >= pending.createdAt &&
           r.source_tx_hash,
@@ -111,7 +199,7 @@ export async function fundingStatus(
           error:
             "Transfer submission is unconfirmed. Checking payment history; do not send again.",
         };
-      saveCreation(key, {
+      updatePending({
         ...pending,
         hash: candidates[0].source_tx_hash as Hex,
       });
@@ -128,7 +216,7 @@ export async function fundingStatus(
       throw error;
     }
     if (receipt.status !== "success") {
-      clearCreation(key);
+      finishPending();
       return {
         ...idle,
         error: "USDC transfer reverted. You can retry funding.",
@@ -151,7 +239,7 @@ export async function fundingStatus(
           return (
             event.args.from.toLowerCase() === owner.toLowerCase() &&
             event.args.to.toLowerCase() === pending.receiver.toLowerCase() &&
-            event.args.value === 3000000n
+            event.args.value === BigInt(amountRaw)
           );
         } catch {
           return false;
@@ -168,21 +256,63 @@ export async function fundingStatus(
   } else {
     record = records.find(
       (r) =>
-        r.requested_usdc_amount_raw === "3000000" &&
+        r.requested_usdc_amount_raw === amountRaw &&
         r.created_at &&
         Date.parse(r.created_at) >= pending.createdAt &&
         r.system_core_account_address?.toLowerCase() ===
           pending.receiver.toLowerCase(),
     );
   }
+  if (flow === "activation_only") {
+    if (!order?.matched_activation_id || order.status !== "matched")
+      return waiting;
+    const activation = activationSchema.parse(
+      await paymentRequest(config, flow, `/${order.matched_activation_id}`),
+    );
+    invariant(
+      activation.id === order.matched_activation_id &&
+        activation.user_eoa.toLowerCase() === owner.toLowerCase() &&
+        (pending.source !== "arbitrum" ||
+          (activation.source_chain_id === 42161 &&
+            activation.source_tx_hash?.toLowerCase() ===
+              pending.hash?.toLowerCase())),
+      "FUNDING_MISMATCH",
+      "Activation does not match the submitted payment.",
+    );
+    if (activationReady(activation)) {
+      finishPending();
+      return idle;
+    }
+    return {
+      state: "failed",
+      error:
+        activation.last_error ||
+        "Activation payment requires review. Do not send again.",
+      pollAfter: 5000,
+    };
+  }
+  if (flow === "gas_only") {
+    if (order?.status !== "matched" || !order.matched_top_up_id) return waiting;
+    record = records.find((r) => r.id === order.matched_top_up_id);
+  }
   if (!record) return waiting;
   if (record.id) {
-    const latest = (await gasTopUpRequest(
-      config.protocolServiceUrl,
-      `/${encodeURIComponent(record.id)}`,
-    )) as GasTopUpRecord;
+    const latest = (
+      flow === "gas_only"
+        ? await paymentRequest(
+            config,
+            flow,
+            `/${encodeURIComponent(record.id)}`,
+          )
+        : await gasTopUpRequest(
+            config.protocolServiceUrl,
+            `/${encodeURIComponent(record.id)}`,
+          )
+    ) as GasTopUpRecord;
     invariant(
       latest.id === record.id &&
+        (flow !== "gas_only" ||
+          latest.user_eoa?.toLowerCase() === owner.toLowerCase()) &&
         (pending.source !== "arbitrum" ||
           (latest.source_chain_id === 42161 &&
             latest.source_tx_hash?.toLowerCase() ===
@@ -216,9 +346,9 @@ export async function fundingStatus(
     if (
       receipt.status === "success" &&
       receipt.to?.toLowerCase() === owner.toLowerCase() &&
-      gas > BigInt(pending.hypeBefore)
+      (!config.creationGasConversionEnabled || gas > BigInt(pending.hypeBefore))
     ) {
-      clearCreation(key);
+      finishPending();
       return idle;
     }
   }

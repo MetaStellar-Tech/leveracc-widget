@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-[npm 接入指南](docs/NPM_INTEGRATION.zh-CN.md) · [钱包接入](docs/WALLET_INTEGRATION.zh-CN.md) · [发布流程](docs/RELEASING.zh-CN.md) · [独立 npm 示例](examples/npm/README.zh-CN.md)
+[npm 接入指南](docs/NPM_INTEGRATION.zh-CN.md) · [钱包接入](docs/WALLET_INTEGRATION.zh-CN.md) · [发布流程](docs/RELEASING.zh-CN.md) · [独立 npm 示例](examples/npm/README.zh-CN.md) · [创建前配置](#创建前的-gas-兑换与激活)
 
 独立的 React / JavaScript 账户与借贷组件，使用接入方提供的 EIP-1193 钱包。**不需要 v1 API、登录会话、Cookie 或后端账户注册。** 账户真值来自 Factory 与链上状态；Core 余额通过协议 read adapter 查询，首次入金中转通过 Hyperliquid SDK 签名执行。
 
@@ -106,7 +106,9 @@ widget.destroy(); // 可重复调用
 | `projectId`                   | 必填 bytes32               | 已注册项目 ID                                                            |
 | `network`                     | 必填 `mainnet` / `testnet` | HyperEVM 999 / 998，与 Core 网络成组选择                                 |
 | `protocolServiceUrl` | 按网络预设 | Protocol Service 地址，用于查询创建前的历史充值记录 |
-| `skipCreationTopUpCheck` | `false` | 跳过创建账户的 3 USDC 付款历史校验，仍要求 Fund wallet 至少有 0.01 HYPE；仅接受布尔值 |
+| `creationGasConversionEnabled` | `true` | 开启创建前 Gas 兑换与固定 HYPE 门槛；仅接受布尔值 |
+| `creationAccountActivationEnabled` | `true` | 开启创建前激活付款条件；仅接受布尔值 |
+| `skipCreationTopUpCheck` | `false` | 跳过 Gas 付款历史；开启 Gas 兑换时仍要求 HYPE，兼容规则见下文；仅接受布尔值 |
 | `rpcUrl`                      | 网络预设                   | 同网络 HyperEVM RPC                                                      |
 | `arbitrumRpcUrl` | 对应网络的 Arbitrum 预设 | 主网使用 Arbitrum One（42161）；测试网使用 Arbitrum Sepolia（421614） |
 | `locale`                      | `en`                       | `en` / `zh`                                                              |
@@ -119,9 +121,40 @@ widget.destroy(); // 可重复调用
 | `borrow.expiryWindowSeconds`  | `900`                      | intent 有效期，1–3600 秒                                                 |
 | `arbitrumWithdrawalEnabled`   | `true`                    | 主网与测试网均支持，需确认部署支持 Circle forwarding                                 |
 
-设置 `config.skipCreationTopUpCheck: true` 后，创建账户仅校验当前网络 HyperEVM 上 Fund wallet（owner EOA）的实时余额是否至少为 0.01 HYPE，没有待处理内置付款时不请求付款历史；付款历史服务不可用不会阻止创建，但余额不足或余额读取失败仍会阻止。余额不足时仍可使用内置 3 USDC 充值或 `onGasTopUp`；内置充值需要可用的充值路由配置。余额足够时跳过充值及回调。配置变更会使旧检测结果失效。创建成功不代表已激活，项目方负责后续激活检测；现有签名、账户归属、项目绑定及后续操作校验保持不变。示例见[钱包集成](docs/WALLET_INTEGRATION.zh-CN.md)。
+未填写任何新创建开关时，设置 `config.skipCreationTopUpCheck: true` 后，创建账户仅校验当前网络 HyperEVM 上 Fund wallet（owner EOA）的实时余额是否至少为 0.01 HYPE，没有待处理内置付款时不请求付款历史；付款历史服务不可用不会阻止创建，但余额不足或余额读取失败仍会阻止。余额不足时仍可使用内置 3 USDC 充值或 `onGasTopUp`；内置充值需要可用的充值路由配置。余额足够时跳过充值及回调。配置变更会使旧检测结果失效。创建成功不代表已激活，项目方负责后续激活检测；现有签名、账户归属、项目绑定及后续操作校验保持不变。示例见[钱包集成](docs/WALLET_INTEGRATION.zh-CN.md)。
 
 移除了旧版 `apiBaseUrl`、`indexerUrl` 与 `defaultTab`；`protocolServiceUrl` 用于创建前充值记录查询。入口区不自动打开业务弹窗。功能关闭后，对应弹窗关闭，控制器阻止新签名和提交；已提交交易继续跟踪。
+
+### 创建前的 Gas 兑换与激活
+
+可独立配置 `creationGasConversionEnabled` 和 `creationAccountActivationEnabled`。两者仅接受布尔值，默认均为 `true`。
+
+| Gas 兑换 | 账户激活 | 准备流程 |
+| --- | --- | --- |
+| `true` | `true` | 一次合并转账，支付 3 USDC |
+| `true` | `false` | 独立兑换 Gas，支付 3 USDC |
+| `false` | `true` | 独立激活付款，支付 1.1 USDC |
+| `false` | `false` | 直接进入创建账户流程 |
+
+仅激活账户的配置：
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "zh",
+  creationGasConversionEnabled: false,
+  creationAccountActivationEnabled: true,
+} as const;
+```
+
+关闭 Gas 兑换后，创建资格检测与账户提交均不再要求固定的 0.01 HYPE 最低余额。实际交易模拟和钱包交易校验仍然生效。关闭的功能不需要对应的资格查询。两项都关闭时，无需付款服务即可创建账户；此前已提交的付款仍保留并单独核对，不会因已关闭功能的资格条件阻止创建。
+
+省略两个新开关时，完整保留旧行为，包括 `skipCreationTopUpCheck: true` 仅检测 HYPE。显式填写任意一个开关后，另一个默认 `true`，此时 `skipCreationTopUpCheck` 仅跳过 Gas 付款历史，不能跳过已开启的激活准备。仅兑换模式读取 `/api/v1/gas-conversions`，仅激活模式读取 `/api/v1/account-activations`，合并模式继续使用 `/api/v1/gas-top-ups`。显式合并模式校验成功服务记录中的激活费用分配，Gas-only 记录不能作为合并激活的资格证明。
+
+弹窗保留现有准备与创建步骤、按钮位置和自动轮询，仅按模式调整文案及金额；两项都关闭时显示无需准备。不增加用户模式选择器。主网使用 Arbitrum USDC，测试网使用 HyperCore Spot。
+
+详见[钱包接入中的订单与恢复说明](docs/WALLET_INTEGRATION.zh-CN.md#创建前的-gas-兑换与激活)。
 
 ### 第三方集成的网络部署
 
@@ -195,7 +228,7 @@ pnpm test:browser
 - 提现：来源为 Fund 或 Trade，目标为 owner 在 Arbitrum 的钱包。Fund 先授权 Circle，再发起跨链；Trade 默认启用，可通过 `arbitrumWithdrawalEnabled: false` 关闭，不足时先从 Core Spot 补足 Trade EVM，之后显式继续跨链。合约限制导致无法足额转出时阻止提交。
 - Fund ↔ Trade 保留在划转入口；不恢复历史内部提现记录。底层原有方法没有移除，`TransferRoute` 新增 `fundToArbitrum`。
 - 报价在表单内显示，费用上涨需重新确认。授权通过 `operationSubmitted` 的 `action: "bridgeApproval"` 报告已发出，不代表授权已生效或提现到账。
-- 内置充值需要来源网络的 3 USDC；主网还需 Arbitrum ETH 支付 gas。待处理转账可恢复且禁止重复发送。充值状态采用服务端轮询间隔，默认 5 秒。除非开启 `skipCreationTopUpCheck`，否则直接转入 HYPE 不能替代历史充值资格；开启该选项后，已有待处理内置付款仍通过服务端记录跟踪。
+- 默认合并充值需要来源网络的 3 USDC；主网还需 Arbitrum ETH 支付 gas。待处理转账可恢复且禁止重复发送。充值状态采用服务端轮询间隔，默认 5 秒。除非开启 `skipCreationTopUpCheck`，否则直接转入 HYPE 不能替代历史充值资格；开启该选项后，已有待处理内置付款仍通过服务端记录跟踪。
 
 视觉对照使用参考仓库的真实组件及固定测试数据，不启动其后端、不修改参考仓库：
 
