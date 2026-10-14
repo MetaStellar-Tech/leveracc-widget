@@ -175,10 +175,20 @@ for (const locale of ["en", "zh"]) {
   });
 }
 
-test("pending transfer survives language update and reopening with its direction intact", async ({
+test("pending transfer survives language update but closing resets the flow", async ({
   page,
 }) => {
   await mountMockWidget(page);
+  await page.evaluate(() => {
+    const wallet = (window as any).testWallet;
+    const original = wallet.request;
+    let sends = 0;
+    wallet.request = async (request: any) => {
+      if (request.method === "eth_sendTransaction" && ++sends === 2)
+        throw { code: 4001 };
+      return original(request);
+    };
+  });
   await page.getByRole("button", { name: "Transfer", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("textbox").fill("10");
@@ -206,10 +216,11 @@ test("pending transfer survives language update and reopening with its direction
   ).toBe(saved);
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "划转", exact: true }).click();
-  await expect(dialog.getByRole("textbox")).toHaveValue("10");
+  await expect(dialog.getByRole("textbox")).toHaveValue("");
   await expect(dialog.locator(".funds-card").first()).toContainText("资金账户");
-  await expect(dialog.getByRole("button", { name: "切换方向" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "切换方向" })).toBeEnabled();
   await expect(
     dialog.getByRole("button", { name: "继续划转", exact: true }),
-  ).toBeEnabled();
+  ).toHaveCount(0);
+  await expect(dialog.locator(".primary")).toBeDisabled();
 });
