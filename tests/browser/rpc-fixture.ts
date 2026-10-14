@@ -52,6 +52,8 @@ export async function mockBackend(
     unauthorized?: boolean;
     unbound?: boolean;
     dailyRatePpm?: number;
+    repayTopup?: boolean;
+    tradeWithdrawable?: bigint;
   } = {},
 ) {
   let creationConfirmed = !options.delayedCreationReceipt;
@@ -147,13 +149,14 @@ export async function mockBackend(
     transfer: true,
     approve: true,
     allowance: 0n,
-    previewSafeUserClaimablePrimaryDirect: 1175495000n,
+    previewSafeUserClaimablePrimaryDirect:
+      options.tradeWithdrawable ?? 1175495000n,
     readCoreUserExists: true,
     balanceOf: 1250000000n,
     l1ReadAdapter: asset,
     readCoreSpotBalanceState: {
       l1BlockNumber: 1n,
-      total: 42550000000n,
+      total: options.repayTopup ? 5927370300n : 42550000000n,
       hold: 0n,
       entryNtl: 0n,
     },
@@ -174,10 +177,14 @@ export async function mockBackend(
       pendingGasChargeDebtUsdc: 0n,
       borrowPrincipalOutstanding: 100000000n,
       badDebtAmount: 0n,
-      availableAssetBalance: 750000000n,
+      availableAssetBalance: options.repayTopup ? 127652n : 750000000n,
       availableUserAssetBalance: 650000000n,
       payableInterestNow: 250000n,
-      totalRealtimeDebtNow: options.unbound ? 0n : 100250000n,
+      totalRealtimeDebtNow: options.unbound
+        ? 0n
+        : options.repayTopup
+          ? 42558294n
+          : 100250000n,
       stopRequestedAt: 0n,
       settledAt: 0n,
     },
@@ -210,6 +217,20 @@ export async function mockBackend(
       idleLiquidity: 99000000000n,
     },
   };
+  let pendingRepayTopup = 0n;
+  if (options.repayTopup)
+    await page.exposeFunction("__accrueRepayInterest", (amount: string) => {
+      (
+        values.getAccountRuntimeStatus as { totalRealtimeDebtNow: bigint }
+      ).totalRealtimeDebtNow += BigInt(amount);
+    });
+  if (options.repayTopup)
+    await page.exposeFunction("__arriveRepayTopup", () => {
+      (
+        values.getAccountRuntimeStatus as { availableAssetBalance: bigint }
+      ).availableAssetBalance += pendingRepayTopup;
+      pendingRepayTopup = 0n;
+    });
   await page.exposeFunction("__mockSubmitted", (tx: { data: Hex }) => {
     for (const abi of abis) {
       try {
@@ -247,12 +268,18 @@ export async function mockBackend(
             runtime.availableAssetBalance += args[0].minBorrowAmount;
             runtime.totalRealtimeDebtNow += args[0].minBorrowAmount;
             break;
-          case "repay":
-            runtime.availableAssetBalance -= args[0].requestedRepayAmount;
-            runtime.totalRealtimeDebtNow -= args[0].requestedRepayAmount;
+          case "repay": {
+            const paid =
+              args[0].requestedRepayAmount < runtime.totalRealtimeDebtNow
+                ? args[0].requestedRepayAmount
+                : runtime.totalRealtimeDebtNow;
+            runtime.availableAssetBalance -= paid;
+            runtime.totalRealtimeDebtNow -= paid;
             break;
+          }
           case "sendCoreSpotToEvm":
-            runtime.availableAssetBalance += args[1];
+            if (options.repayTopup) pendingRepayTopup += args[1];
+            else runtime.availableAssetBalance += args[1];
             spot.total -= args[1] * 100n;
             break;
           case "withdraw":
@@ -341,7 +368,15 @@ export async function mockBackend(
                     call.functionName === "previewRepay"
                       ? "repayableAmount"
                       : "netPayoutAmount"
-                  ] = amount ?? 0n;
+                  ] =
+                    call.functionName === "previewRepay"
+                      ? amount <
+                        (values.getAccountRuntimeStatus as any)
+                          .totalRealtimeDebtNow
+                        ? amount
+                        : (values.getAccountRuntimeStatus as any)
+                            .totalRealtimeDebtNow
+                      : (amount ?? 0n);
                   if (call.functionName === "previewWithdrawPlanPrimaryDirect")
                     (value as any).requestedAmount = amount;
                   if (
@@ -486,7 +521,13 @@ export async function mockBackend(
       const { type } = route.request().postDataJSON();
       const data: Record<string, unknown> = {
         spotClearinghouseState: {
-          balances: [{ coin: "USDC", total: "425.50000000", hold: "0" }],
+          balances: [
+            {
+              coin: "USDC",
+              total: options.repayTopup ? "59.273703" : "425.50000000",
+              hold: "0",
+            },
+          ],
         },
         clearinghouseState: { withdrawable: "280.25" },
         extraAgents: [{ address: agent, validUntil: Date.now() + 600000 }],

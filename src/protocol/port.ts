@@ -1,3 +1,4 @@
+import { boundedRead } from "./transaction-wait";
 import {
   createPublicClient,
   http,
@@ -23,6 +24,12 @@ export type ContractCall = {
   args?: readonly unknown[];
 };
 export interface ProtocolPort {
+  checkContext?(): Promise<void>;
+  pause?(milliseconds: number): Promise<void>;
+  waitForReceipt?(
+    hash: Hex,
+    timeoutMs?: number,
+  ): Promise<"success" | "reverted">;
   coreSpotBalance(address: Address): Promise<bigint>;
   read<T>(call: ContractCall): Promise<T>;
   sign(data: {
@@ -56,7 +63,54 @@ export function createPort(
         "RPC endpoint does not match the configured network.",
       );
     }));
+  const checkContext = async () => {
+    invariant(
+      current(),
+      "CONTEXT_CHANGED",
+      "Account or configuration changed.",
+    );
+    await guard();
+    invariant(
+      (
+        (await provider.request({ method: "eth_accounts" })) as string[]
+      )[0]?.toLowerCase() === owner.toLowerCase(),
+      "OWNER_WALLET_MISMATCH",
+      "Connected owner wallet changed.",
+    );
+  };
+  const pause = async (milliseconds: number) => {
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
+    await checkContext();
+  };
   return {
+    checkContext,
+    pause,
+    waitForReceipt: async (hash, timeoutMs = 90_000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await boundedRead(checkContext, deadline - Date.now());
+        try {
+          const receipt = await boundedRead(
+            () => publicClient.getTransactionReceipt({ hash }),
+            deadline - Date.now(),
+          );
+          await boundedRead(checkContext, deadline - Date.now());
+          return receipt.status;
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.name !== "TransactionReceiptNotFoundError"
+          )
+            throw error;
+        }
+        await pause(2000);
+      }
+      invariant(
+        false,
+        "TRANSACTION_WAIT_TIMEOUT",
+        "Transaction confirmation is pending. Retry to check the same transaction.",
+      );
+    },
     coreSpotBalance: async (address) => {
       const client = new InfoClient({
         transport: new HttpTransport({

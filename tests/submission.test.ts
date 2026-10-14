@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WalletProvider } from "../src/types";
 import { resolveConfig } from "../src/core/config";
 const m = vi.hoisted(() => ({
@@ -16,6 +16,7 @@ vi.mock("viem", async (original) => ({
     getChainId: async () => 998,
     simulateContract: async (request: unknown) => ({ request }),
     waitForTransactionReceipt: m.receipt,
+    getTransactionReceipt: m.receipt,
   }),
 }));
 vi.mock("@nktkas/hyperliquid", () => ({
@@ -37,7 +38,7 @@ beforeEach(() => {
 function port(progress = vi.fn()) {
   return createPort(
     config,
-    {} as WalletProvider,
+    { request: async () => [owner] } as WalletProvider,
     owner,
     () => true,
     progress,
@@ -65,4 +66,44 @@ it("never reports a rejected Core API request as submitted", async () => {
     "request failed",
   );
   expect(progress).not.toHaveBeenCalledWith("submitted");
+});
+
+afterEach(() => vi.useRealTimers());
+it("repayment confirmation retries missing receipts and returns a revert", async () => {
+  vi.useFakeTimers();
+  const missing = new Error("not mined");
+  missing.name = "TransactionReceiptNotFoundError";
+  m.receipt
+    .mockRejectedValueOnce(missing)
+    .mockResolvedValueOnce({ status: "reverted" });
+  const result = port().waitForReceipt!(hash);
+  await vi.advanceTimersByTimeAsync(2000);
+  await expect(result).resolves.toBe("reverted");
+  expect(m.receipt).toHaveBeenCalledTimes(2);
+});
+it("repayment receipt polling times out after 90 seconds", async () => {
+  vi.useFakeTimers();
+  const missing = new Error("not mined");
+  missing.name = "TransactionReceiptNotFoundError";
+  m.receipt.mockRejectedValue(missing);
+  const result = expect(port().waitForReceipt!(hash)).rejects.toMatchObject({
+    code: "TRANSACTION_WAIT_TIMEOUT",
+  });
+  await vi.advanceTimersByTimeAsync(90000);
+  await result;
+});
+it("repayment receipt polling stops when its context changes", async () => {
+  let current = false;
+  const p = createPort(
+    config,
+    { request: async () => [owner] } as WalletProvider,
+    owner,
+    () => current,
+    vi.fn(),
+    m.guard,
+  );
+  await expect(p.waitForReceipt!(hash)).rejects.toMatchObject({
+    code: "CONTEXT_CHANGED",
+  });
+  expect(m.receipt).not.toHaveBeenCalled();
 });

@@ -2,8 +2,8 @@ import type { Network } from "../types";
 import type { Address } from "viem";
 import { cctpDeployment } from "../bridge/cctp";
 import { invariant } from "../core/errors";
-import { accountCall, same, type RuntimeStatus } from "./account";
-import { coreTransferable } from "./account-transfer";
+import { same } from "./account";
+import { readTradeWithdrawalBalance } from "./trade-withdrawal-balance";
 import type { ProtocolPort } from "./port";
 
 export async function readArbitrumTradeBalance(
@@ -17,24 +17,7 @@ export async function readArbitrumTradeBalance(
     "UNSUPPORTED_ASSET",
     "Unsupported withdrawal asset.",
   );
-  const [runtime, core, safe] = await Promise.all([
-    port.read<RuntimeStatus>(accountCall(account, "getAccountRuntimeStatus")),
-    port.coreSpotBalance(account),
-    port.read<bigint>(
-      accountCall(account, "previewSafeUserClaimablePrimaryDirect", [0]),
-    ),
-  ]);
-  invariant(
-    typeof runtime.payableInterestNow === "bigint",
-    "INVALID_BALANCE",
-    "Withdrawal interest is unavailable.",
-  );
-  const evm = runtime.availableAssetBalance;
-  const interest = runtime.payableInterestNow;
-  const liquid = evm + coreTransferable(core);
-  const ceiling = liquid > interest ? liquid - interest : 0n;
-  const maximum = safe < ceiling ? safe : ceiling;
-  return { evm, core, interest, maximum: maximum > 0n ? maximum : 0n };
+  return readTradeWithdrawalBalance(port, account);
 }
 
 export function arbitrumWithdrawalTopup(

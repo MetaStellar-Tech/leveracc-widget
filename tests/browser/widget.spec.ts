@@ -499,6 +499,7 @@ test("connected owner completes creation, deposit, lending and both account tran
     await expect(
       dialog.getByRole("link", { name: /View transaction/ }),
     ).toHaveCount(0);
+    await expect(dialog.getByLabel("Amount", { exact: true })).toBeEnabled();
     await page.keyboard.press("Escape");
   }
   await page.getByRole("button", { name: "Transfer", exact: true }).click();
@@ -508,12 +509,6 @@ test("connected owner completes creation, deposit, lending and both account tran
     .getByRole("button", { name: "Transfer", exact: true })
     .click();
 
-  await expect(
-    page.getByRole("button", { name: "Continue transfer", exact: true }),
-  ).toBeEnabled({ timeout: 20000 });
-  await page
-    .getByRole("button", { name: "Continue transfer", exact: true })
-    .click();
   await expect
     .poll(
       () =>
@@ -551,7 +546,7 @@ test("connected owner completes creation, deposit, lending and both account tran
       { timeout: 20000 },
     )
     .toBe(3);
-  expect(receiptQueries).toEqual(["https://api.example.test/rpc"]);
+  expect(receiptQueries).toEqual(Array(3).fill("https://api.example.test/rpc"));
 });
 
 test("static account card and accessible collateral breakdown", async ({

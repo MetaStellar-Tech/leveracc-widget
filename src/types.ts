@@ -82,13 +82,13 @@ export type Stage =
   | "signing"
   | "submitting"
   | "submitted"
-  /** @deprecated Transactions are no longer tracked after submission. */
+  /** Repayment confirmation; other final transactions end at submission. */
   | "confirming"
   /** @deprecated Transactions are no longer tracked after submission. */
   | "bridging"
   /** @deprecated Transactions are no longer tracked after submission. */
   | "settling"
-  /** @deprecated Use submitted; submission does not confirm execution. */
+  /** Confirmed repayment. Submission alone does not confirm execution. */
   | "success"
   | "failed";
 export interface EventContext {
@@ -105,9 +105,16 @@ export type WidgetEvent = EventContext &
         type:
           | "operationProgress"
           | "operationSubmitted"
-          /** @deprecated Use operationSubmitted; arrival is no longer tracked. */
+          /** @deprecated Use operationSubmitted and operationProgress for confirmation. */
           | "operationSuccess";
         operationId: string;
+        repayStep?:
+          | "topup"
+          | "confirming"
+          | "arrival"
+          | "repay"
+          | "repayConfirming"
+          | "complete";
         action: Action;
         stage: Stage;
         hash?: Hex;
@@ -189,6 +196,22 @@ export interface OperationRecord extends EventContext {
   createdAt: number;
   error?: string;
   bridge?: import("./bridge/cctp").CctpOperation;
+  repayFlow?: {
+    full?: boolean;
+    boundProjectId: Hex;
+    amount: string;
+    topup: string;
+    step:
+      | "topup"
+      | "confirming"
+      | "arrival"
+      | "repay"
+      | "repayConfirming"
+      | "complete";
+    repayHash?: Hex;
+    topupHash?: Hex;
+    submissionUnknown?: boolean;
+  };
   transferFlow?: {
     direction: "fundToTrade" | "accountToFund";
     amount: string;
@@ -200,6 +223,11 @@ export interface OperationRecord extends EventContext {
     topup: string;
     completedHashes: Hex[];
     withdrawMinimum?: string;
+    submission?: {
+      phase: "ready" | "waiting" | "check" | "unknown" | "submitted";
+      pendingStep?: "approval" | "deposit" | "topup";
+      hash?: Hex;
+    };
   };
   arbitrumWithdrawal?: {
     amount: string;

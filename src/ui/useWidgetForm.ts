@@ -1,3 +1,5 @@
+import { coreTransferable } from "../protocol/account-transfer";
+import { repayAvailable } from "../protocol/repay-flow";
 import {
   useEffect,
   useId,
@@ -6,7 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { WidgetController } from "../core/controller";
-import type { FundsFeature, TransferRoute } from "../types";
+import type { Balances, FundsFeature, TransferRoute } from "../types";
 import { formatAmount, parseAmount } from "../core/amount";
 import { terminal } from "../core/operations";
 import { en, zh } from "./strings";
@@ -37,6 +39,9 @@ export function useWidgetForm(c: WidgetController, active = true) {
     version: bigint;
     dailyRatePpm: number;
   }>();
+  const [transferBalances, setTransferBalances] = useState<
+    Balances & { withdrawable?: bigint }
+  >();
   const [withdrawMaximum, setWithdrawMaximum] = useState<bigint>();
   const [withdrawLoading, setWithdrawLoading] = useState(false);
   const [arbitrumBalance, setArbitrumBalance] = useState<bigint>();
@@ -76,7 +81,7 @@ export function useWidgetForm(c: WidgetController, active = true) {
         ["tradeToArbitrum", "fundToArbitrum"].includes(route));
   const units = (() => {
     try {
-      return full && tab === "repay" ? s.balances?.debt : parseAmount(amount);
+      return parseAmount(amount);
     } catch {
       return undefined;
     }
@@ -96,7 +101,7 @@ export function useWidgetForm(c: WidgetController, active = true) {
     if (
       s.busy ||
       !operation ||
-      operation.stage !== "submitted" ||
+      !["submitted", "success"].includes(operation.stage) ||
       operation.error ||
       s.continuation?.id === operation.id ||
       handledSubmission.current === operation.id
@@ -192,6 +197,35 @@ export function useWidgetForm(c: WidgetController, active = true) {
     s.balanceRevision,
     balanceRefresh,
   ]);
+  useEffect(() => {
+    let current = true;
+    setTransferBalances(undefined);
+    if (queryReady && tab === "transfer")
+      void c
+        .accountTransferBalances(
+          route === "accountToFund" ? "accountToFund" : "fundToTrade",
+        )
+        .then((value) => {
+          if (current) setTransferBalances(value);
+        })
+        .catch((error) => {
+          if (current)
+            setLocalError(
+              error instanceof Error ? error.message : String(error),
+            );
+        });
+    return () => {
+      current = false;
+    };
+  }, [
+    context,
+    queryReady,
+    tab,
+    route,
+    submissionRevision,
+    s.balanceRevision,
+    balanceRefresh,
+  ]);
   const approved =
     units !== undefined &&
     (tab === "deposit"
@@ -207,18 +241,19 @@ export function useWidgetForm(c: WidgetController, active = true) {
       : tab === "borrow"
         ? s.balances?.borrowable
         : tab === "repay"
-          ? s.balances?.evm
+          ? s.balances
+            ? full
+              ? s.balances.evm + coreTransferable(s.balances.spot)
+              : repayAvailable(s.balances.evm, s.balances.spot, s.balances.debt)
+            : undefined
           : tab === "deposit"
             ? depositRoute === "arbitrum"
               ? arbitrumBalance
               : ownerCore
             : route === "fundToTrade"
-              ? s.balances?.fund
+              ? transferBalances?.fund
               : route === "accountToFund"
-                ? s.balances
-                  ? s.balances.evm +
-                    (s.balances.spot > 5000n ? s.balances.spot - 5000n : 0n)
-                  : undefined
+                ? transferBalances?.withdrawable
                 : route === "coreToEvm" || route === "spotToPerps"
                   ? s.balances
                     ? s.balances.spot > 5000n
@@ -258,10 +293,7 @@ export function useWidgetForm(c: WidgetController, active = true) {
     busy ||
     quoting ||
     pending ||
-    (units !== undefined &&
-      available !== undefined &&
-      units > available &&
-      !(tab === "repay" && full)) ||
+    (units !== undefined && available !== undefined && units > available) ||
     (tab === "borrow" &&
       (s.reasons.length > 0 ||
         (units !== undefined && units < (s.minimumBorrow ?? 0n)))) ||
@@ -425,6 +457,7 @@ export function useWidgetForm(c: WidgetController, active = true) {
 
   return {
     arbitrumBalance,
+    transferBalances,
     refreshBalances: () => {
       setLocalError(undefined);
       setBalanceRefresh((value) => value + 1);

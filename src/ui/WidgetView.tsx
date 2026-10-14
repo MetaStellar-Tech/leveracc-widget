@@ -87,22 +87,14 @@ export function WidgetView({
     if (key === "withdraw" && operation?.transferFlow) {
       m.setAmount(formatAmount(BigInt(operation.transferFlow.amount)));
     }
-    if (key === "transfer") {
-      const direction =
-        operation?.stage === "awaitingAction" && operation.action === "transfer"
-          ? operation.transferFlow?.direction
-          : undefined;
-      m.setRoute(
-        direction ??
-          (m.route === "accountToFund" ? "accountToFund" : "fundToTrade"),
-      );
-    }
+    if (key === "transfer")
+      m.setRoute(m.route === "accountToFund" ? "accountToFund" : "fundToTrade");
   };
   const flowOperation = s.continuation;
-  const flow = flowOperation?.transferFlow;
-  const flowActive = !!(flow || flowOperation?.arbitrumWithdrawal);
-  const flowFeature =
-    flowOperation?.action === "withdraw" ? "withdraw" : "transfer";
+  const flowActive =
+    flowOperation?.action === "withdraw" &&
+    !!(flowOperation.transferFlow || flowOperation.arbitrumWithdrawal);
+  const flowFeature = "withdraw";
   const error =
     m.localError ||
     (s.status === "readError" ? t.notReady : s.error) ||
@@ -116,7 +108,20 @@ export function WidgetView({
         : undefined,
     );
   }, [error, errorRevision]);
+  const modalBusy =
+    s.busy &&
+    !(
+      (open === "transfer" &&
+        s.operation?.transferFlow?.submission?.phase === "waiting") ||
+      (open === "repay" &&
+        ["confirming", "arrival", "repayConfirming"].includes(
+          s.operation?.repayFlow?.step ?? "",
+        ))
+    );
   const closeModal = () => {
+    if (open === "transfer") c.resetAccountTransfer();
+    if (open === "repay") c.resetRepayment();
+    m.refreshBalances();
     setFeedback(undefined);
     setOpen(null);
   };
@@ -242,9 +247,7 @@ export function WidgetView({
                   className="secondary"
                   onClick={() => openAction(flowFeature)}
                 >
-                  {flowFeature === "withdraw"
-                    ? t.viewWithdrawal
-                    : t.viewProgress}
+                  {t.viewWithdrawal}
                 </button>
               )}
           </>
@@ -297,8 +300,8 @@ export function WidgetView({
                     ? t.transferDescription
                     : undefined
           }
-          busy={s.busy}
-          walletPrompt={s.busy}
+          busy={modalBusy}
+          walletPrompt={modalBusy}
           closeLabel={t.close}
           closeBusyLabel={t.closeBusy}
           onClose={closeModal}

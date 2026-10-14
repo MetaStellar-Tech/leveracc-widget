@@ -147,7 +147,6 @@ export function LendingForm({
           {busy ? t.submitting : t.borrowAction}
         </button>
       </div>
-      {!!units && <p className="note">{t.borrowNote}</p>}
     </div>
   );
 }

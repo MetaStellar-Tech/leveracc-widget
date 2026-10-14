@@ -38,6 +38,12 @@ it.each<FundsFeature>(["deposit", "withdraw", "transfer", "borrow", "repay"])(
       },
       subscribe: () => () => {},
       getSnapshot: () => snapshot,
+      accountTransferBalances: vi.fn().mockResolvedValue({
+        fund: 100000000n,
+        evm: 100000000n,
+        spot: 100000000n,
+        withdrawable: 100000000n,
+      }),
       quoteBridge: vi.fn().mockResolvedValue(100000n),
       quoteArbitrumWithdrawal: vi
         .fn()
@@ -45,13 +51,11 @@ it.each<FundsFeature>(["deposit", "withdraw", "transfer", "borrow", "repay"])(
       bridgeBalances: vi
         .fn()
         .mockResolvedValue({ balance: 100000000n, allowance: 100000000n }),
-      fundSourceBalances: vi
-        .fn()
-        .mockResolvedValue({
-          core: 100000000n,
-          fund: 100000000n,
-          allowance: 100000000n,
-        }),
+      fundSourceBalances: vi.fn().mockResolvedValue({
+        core: 100000000n,
+        fund: 100000000n,
+        allowance: 100000000n,
+      }),
     } as unknown as WidgetController;
     let model!: ReturnType<typeof useWidgetForm>;
     function Form() {

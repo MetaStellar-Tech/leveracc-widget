@@ -1,7 +1,7 @@
 import { CopyAddressButton } from "./CopyAddressButton";
 import { Skeleton } from "./Skeleton";
 import type { useWidgetForm } from "./useWidgetForm";
-import { formatAmount } from "../core/amount";
+import { accountTransferMax, formatAmount } from "../core/amount";
 import { FundsRoutePanel, shortAddress } from "./FundsRoutePanel";
 import { Icon } from "./Icons";
 export function FundsForm({
@@ -40,6 +40,11 @@ export function FundsForm({
     tab === "transfer"
       ? s.continuation.transferFlow
       : undefined;
+  const currentFlow =
+    tab === "transfer" && s.operation?.action === "transfer"
+      ? s.operation.transferFlow
+      : flow;
+  const transferPhase = (currentFlow ?? flow)?.submission?.phase;
   const activation =
     !deposit && forward && s.reasons.includes("CORE_ACTIVATION_REQUIRED")
       ? 1000000n
@@ -123,6 +128,7 @@ export function FundsForm({
       )}
       <div className="funds-route-stack">
         <FundsRoutePanel
+          balanceLabel={deposit || forward ? t.balance : t.withdrawable}
           t={t}
           side="source"
           label={sourceLabel}
@@ -140,7 +146,14 @@ export function FundsForm({
           onMax={
             available === undefined
               ? undefined
-              : () => setAmount(money(available))
+              : () =>
+                  setAmount(
+                    money(
+                      !deposit && !forward
+                        ? accountTransferMax(available)
+                        : available,
+                    ),
+                  )
           }
         />
         <div className="route-switch">
@@ -168,7 +181,13 @@ export function FundsForm({
           }
           address={targetOwner ? s.owner : s.account}
           balanceLoading={m.s.status === "loading"}
-          balance={money(targetOwner ? s.balances?.fund : s.balances?.spot)}
+          balance={money(
+            deposit
+              ? s.balances?.fund
+              : targetOwner
+                ? m.transferBalances?.fund
+                : m.transferBalances?.spot,
+          )}
           amount={
             received !== undefined && received > 0n
               ? money(received)
@@ -203,7 +222,11 @@ export function FundsForm({
             : undefined
         }
         disabled={
-          flow ? busy || s.continuation?.stage !== "awaitingAction" : invalid
+          flow
+            ? busy ||
+              flow.submission?.phase === "unknown" ||
+              s.continuation?.stage !== "awaitingAction"
+            : invalid
         }
         onClick={flow ? () => void m.invoke(m.continueTransfer) : m.execute}
       >
@@ -212,19 +235,25 @@ export function FundsForm({
         )}
         {depositProgress
           ? t[depositProgress]
-          : flow
-            ? t.continueTransfer
-            : busy
-              ? t.submitting
-              : isBridge && !approved
-                ? t.approve
-                : deposit
-                  ? t.depositAction
-                  : units
-                    ? `${t.transfer} ${formatAmount(units)} USDC`
-                    : forward
-                      ? t.transferToTrade
-                      : t.transferToFund}
+          : transferPhase === "waiting"
+            ? t.transferWaiting
+            : transferPhase === "check"
+              ? t.transferCheck
+              : transferPhase === "unknown"
+                ? t.transferUnknown
+                : flow
+                  ? t.continueTransfer
+                  : busy
+                    ? t.submitting
+                    : isBridge && !approved
+                      ? t.approve
+                      : deposit
+                        ? t.depositAction
+                        : units
+                          ? `${t.transfer} ${formatAmount(units)} USDC`
+                          : forward
+                            ? t.transferToTrade
+                            : t.transferToFund}
       </button>
       {deposit && (
         <p className="powered">{isBridge ? t.poweredCircle : t.poweredCore}</p>

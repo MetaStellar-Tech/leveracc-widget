@@ -1,4 +1,5 @@
-import { formatAmount } from "../core/amount";
+import { repayAvailable } from "../protocol/repay-flow";
+import { formatAmount, repayCeiling } from "../core/amount";
 import { Skeleton } from "./Skeleton";
 import type { useWidgetForm } from "./useWidgetForm";
 
@@ -10,19 +11,32 @@ export function RepayForm({
   const { t, s, amount, setAmount, setFull, units, busy, pending, id } = m;
   const debt = s.balances?.debt;
   const evm = s.balances?.evm;
-  const repayable =
-    debt === undefined || evm === undefined
-      ? undefined
-      : evm < debt
-        ? evm
-        : debt;
-  const locked = busy || pending;
+  const repayable = s.balances
+    ? repayAvailable(s.balances.evm, s.balances.spot, s.balances.debt)
+    : undefined;
+  const flow =
+    s.operation?.action === "repay" ? s.operation.repayFlow : undefined;
+  const retry = s.continuation?.action === "repay";
+  const locked = busy || pending || retry;
+  const label = !busy
+    ? retry
+      ? t.repayRetry
+      : t.repay
+    : flow?.step === "repayConfirming"
+      ? t.repayConfirming
+      : flow?.step === "topup"
+        ? t.repayTopup
+        : flow?.step === "confirming" || flow?.step === "arrival"
+          ? t.repayArrival
+          : s.operation?.stage === "submitting"
+            ? t.repaySubmitting
+            : t.repaySigning;
   const money = (value?: bigint) =>
     value === undefined ? "--" : formatAmount(value);
   const fillDebt = () => {
     if (debt === undefined) return;
-    setFull(false);
-    setAmount(formatAmount(debt));
+    setFull(true);
+    setAmount(formatAmount(repayCeiling(debt)));
   };
   return (
     <div className="repay-form">
@@ -84,18 +98,20 @@ export function RepayForm({
       </div>
       <button
         className="primary"
-        aria-label={busy ? undefined : t.repay}
+        aria-label={busy ? undefined : retry ? t.repayRetry : t.repay}
         disabled={
-          m.invalid ||
-          debt === undefined ||
-          debt <= 0n ||
-          !units ||
-          units > debt
+          retry
+            ? busy || pending || !!flow?.submissionUnknown
+            : m.invalid ||
+              debt === undefined ||
+              debt <= 0n ||
+              !units ||
+              (!m.full && units > debt)
         }
         onClick={m.execute}
       >
         {busy && <span className="loader" />}
-        {busy ? t.submitting : t.repay}
+        {label}
       </button>
     </div>
   );

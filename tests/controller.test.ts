@@ -31,6 +31,13 @@ vi.mock("../src/protocol/port", () => ({
         );
       },
       nativeBalance: mock.gas,
+      checkContext: async () => {
+        if (!current()) throw Error("Context changed");
+      },
+      waitForReceipt: async (hash: string) => (await mock.receipt(hash)).status,
+      pause: async (ms: number) => {
+        await new Promise((r) => setTimeout(r, ms));
+      },
       sendCore: vi.fn(async () => {}),
       read: mock.read,
       info: mock.info,
@@ -70,6 +77,7 @@ const config: WidgetOptions["config"] = {
   projectId: `0x${"ab".repeat(32)}`,
   network: "testnet",
 };
+let approvedAllowance = 0n;
 let registered = true,
   created = true,
   listeners: Record<string, (...args: unknown[]) => void>,
@@ -95,6 +103,7 @@ function make(events: WidgetEvent[] = []) {
 beforeEach(() => {
   localStorage.clear();
   vi.useFakeTimers();
+  approvedAllowance = 0n;
   registered = true;
   created = true;
   listeners = {};
@@ -117,7 +126,7 @@ beforeEach(() => {
         executionWalletAuthorizedProjectId: config.projectId,
         registry: asset,
         asset,
-        allowance: 0n,
+        allowance: approvedAllowance,
         readCoreUserExists: true,
         l1ReadAdapter: asset,
         readCoreSpotBalanceState: { total: 5000000000n, hold: 0n },
@@ -154,7 +163,10 @@ beforeEach(() => {
       })[type],
   );
   mock.sign.mockResolvedValue(`0x${"ab".repeat(65)}`);
-  mock.write.mockResolvedValue(hash);
+  mock.write.mockImplementation(async (call) => {
+    if (call.functionName === "approve") approvedAllowance = call.args[1];
+    return hash;
+  });
   mock.receipt.mockResolvedValue({ status: "success" });
   vi.stubGlobal(
     "fetch",
@@ -337,119 +349,109 @@ describe("widget lifecycle integration", () => {
     expect(c.getSnapshot().operation).toBeUndefined();
     expect(mock.write).not.toHaveBeenCalled();
   });
-  it("keeps the next step only in this page and rechecks allowance", async () => {
+  it("automatically confirms approval and deposits, without tracking the final receipt", async () => {
     const events: WidgetEvent[] = [];
     const { c } = make(events);
     await c.connect();
     await c.accountTransfer("fundToTrade", "10");
-    expect(c.getSnapshot().operation).toMatchObject({
-      stage: "awaitingAction",
-      hash,
-      transferFlow: { step: "deposit" },
-    });
-    expect(events.filter((e) => e.type === "operationSubmitted")).toHaveLength(
-      1,
-    );
-    expect(events.filter((e) => e.type === "operationSuccess")).toHaveLength(0);
-    await c.continueTransfer();
-    expect(mock.write).toHaveBeenCalledOnce();
-    expect(c.getSnapshot().operation?.error).toContain("Approval");
-    const read = mock.read.getMockImplementation()!;
-    mock.read.mockImplementation(async (call) =>
-      call.functionName === "allowance" ? 10000000n : read(call),
-    );
-    await c.continueTransfer();
     expect(mock.write.mock.calls.map(([call]) => call.functionName)).toEqual([
       "approve",
       "depositFor",
     ]);
+    expect(mock.receipt).toHaveBeenCalledTimes(1);
     expect(c.getSnapshot().operation?.stage).toBe("submitted");
+    expect(c.getSnapshot().continuation).toBeUndefined();
     expect(events.filter((e) => e.type === "operationSubmitted")).toHaveLength(
       2,
     );
     expect(localStorage.length).toBe(0);
-    const { c: fresh } = make();
-    await fresh.connect();
-    expect(fresh.getSnapshot().operation).toBeUndefined();
   });
-  it.each([{ code: 4001 }, Error("RPC disconnected")])(
-    "releases failed submissions for explicit retry: %s",
-    async (error) => {
-      const { c } = make();
-      await c.connect();
-      mock.write.mockRejectedValueOnce(error);
-      await c.accountTransfer("fundToTrade", "10");
-      expect(c.getSnapshot()).toMatchObject({
-        busy: false,
-        operation: {
-          stage: "awaitingAction",
-          transferFlow: { step: "approval" },
-        },
-      });
-      await c.continueTransfer();
-      expect(mock.write).toHaveBeenCalledTimes(2);
-      expect(c.getSnapshot().operation?.transferFlow?.step).toBe("deposit");
-    },
-  );
-  it("keeps the continuation and previous snapshot intact while a resumed wallet step is cancelled", async () => {
+  it("retries a rejected deposit without repeating approval", async () => {
+    const write = mock.write.getMockImplementation()!;
+    mock.write
+      .mockImplementationOnce(write)
+      .mockRejectedValueOnce({ code: 4001 });
     const { c } = make();
     await c.connect();
     await c.accountTransfer("fundToTrade", "10");
-    const previous = c.getSnapshot().continuation!;
-    const read = mock.read.getMockImplementation()!;
-    mock.read.mockImplementation(async (call) =>
-      call.functionName === "allowance" ? 10000000n : read(call),
-    );
-    let reject!: (error: unknown) => void;
-    mock.write.mockImplementationOnce(
+    expect(c.getSnapshot().continuation?.transferFlow?.step).toBe("deposit");
+    const previous = structuredClone(c.getSnapshot().continuation);
+    await c.continueTransfer();
+    expect(mock.write.mock.calls.map(([call]) => call.functionName)).toEqual([
+      "approve",
+      "depositFor",
+      "depositFor",
+    ]);
+    expect(previous?.transferFlow?.completedHashes).toEqual([hash]);
+    expect(c.getSnapshot().continuation).toBeUndefined();
+  });
+  it("discards a closed transfer and rereads allowance on a fresh transfer", async () => {
+    const write = mock.write.getMockImplementation()!;
+    mock.write
+      .mockImplementationOnce(write)
+      .mockRejectedValueOnce({ code: 4001 });
+    const { c } = make();
+    await c.connect();
+    await c.accountTransfer("fundToTrade", "10");
+    expect(c.getSnapshot().continuation).toBeDefined();
+    c.resetAccountTransfer();
+    expect(c.getSnapshot().operation).toBeUndefined();
+    expect(c.getSnapshot().continuation).toBeUndefined();
+    expect(c.getSnapshot().error).toBeUndefined();
+    await c.accountTransfer("fundToTrade", "8");
+    expect(mock.write.mock.calls.map(([call]) => call.functionName)).toEqual([
+      "approve",
+      "depositFor",
+      "depositFor",
+    ]);
+    expect(mock.write.mock.calls.at(-1)![0].args[1]).toBe(8000000n);
+  });
+  it("closing during approval confirmation prevents an automatic deposit", async () => {
+    let confirm!: (receipt: { status: string }) => void;
+    mock.receipt.mockImplementationOnce(
       () =>
-        new Promise((_resolve, rejectPromise) => {
-          reject = rejectPromise;
+        new Promise((resolve) => {
+          confirm = resolve;
         }),
     );
-    const running = c.continueTransfer();
-    await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
-    expect(c.getSnapshot().continuation).toEqual(previous);
-    expect(previous).toMatchObject({
-      stage: "awaitingAction",
-      hash,
-      transferFlow: { step: "deposit" },
-    });
-    reject({ code: 4001 });
-    await running;
-    expect(c.getSnapshot()).toMatchObject({
-      busy: false,
-      continuation: {
-        stage: "awaitingAction",
-        transferFlow: { step: "deposit" },
-      },
-    });
-    await c.continueTransfer();
-    expect(c.getSnapshot().continuation).toBeUndefined();
-    expect(mock.write.mock.calls.map(([call]) => call.functionName)).toEqual([
-      "approve",
-      "depositFor",
-      "depositFor",
-    ]);
-    expect(previous.transferFlow?.completedHashes).toEqual([hash]);
-  });
-  it("allows other actions while a next step is available", async () => {
     const { c } = make();
     await c.connect();
-    await c.accountTransfer("fundToTrade", "10");
-    await c.borrow("10");
+    const pending = c.accountTransfer("fundToTrade", "10");
+    await vi.waitFor(() => expect(confirm).toBeDefined());
+    c.resetAccountTransfer();
+    confirm({ status: "success" });
+    await pending;
     expect(mock.write.mock.calls.map(([call]) => call.functionName)).toEqual([
       "approve",
-      "borrow",
     ]);
-    expect(c.getSnapshot().continuation?.transferFlow?.step).toBe("deposit");
-    const read = mock.read.getMockImplementation()!;
-    mock.read.mockImplementation(async (call) =>
-      call.functionName === "allowance" ? 10000000n : read(call),
+    expect(c.getSnapshot().operation).toBeUndefined();
+    expect(c.getSnapshot().continuation).toBeUndefined();
+    expect(c.getSnapshot().busy).toBe(false);
+  });
+  it("does not replay an ambiguous transfer submission", async () => {
+    const { c } = make();
+    await c.connect();
+    mock.write.mockRejectedValueOnce(Error("RPC disconnected"));
+    await c.accountTransfer("fundToTrade", "10");
+    expect(c.getSnapshot().continuation?.transferFlow?.submission?.phase).toBe(
+      "unknown",
     );
     await c.continueTransfer();
-    expect(mock.write.mock.calls.at(-1)![0].functionName).toBe("depositFor");
-    expect(c.getSnapshot().continuation).toBeUndefined();
+    await c.borrow("10");
+    expect(mock.write).toHaveBeenCalledTimes(1);
+  });
+  it("retries an explicitly rejected approval", async () => {
+    const { c } = make();
+    await c.connect();
+    mock.write.mockRejectedValueOnce({ code: 4001 });
+    await c.accountTransfer("fundToTrade", "10");
+    await c.continueTransfer();
+    expect(mock.write.mock.calls.map(([call]) => call.functionName)).toEqual([
+      "approve",
+      "approve",
+      "depositFor",
+    ]);
+    expect(c.getSnapshot().operation?.stage).toBe("submitted");
   });
   it("keeps submitted status if background refresh fails and allows retry", async () => {
     const { c } = make();
@@ -489,6 +491,7 @@ describe("widget lifecycle integration", () => {
     }
   });
   it("discards an unfinished continuation on remount and context changes", async () => {
+    mock.write.mockRejectedValueOnce({ code: 4001 });
     const { c } = make();
     await c.connect();
     await c.accountTransfer("fundToTrade", "10");
@@ -500,22 +503,18 @@ describe("widget lifecycle integration", () => {
     c.update({ config: { ...config, projectId: `0x${"cd".repeat(32)}` } });
     expect(c.getSnapshot().continuation).toBeUndefined();
   });
-  it("skips an approval retry already satisfied on chain without a new submitted event", async () => {
-    const events: WidgetEvent[] = [];
-    const { c } = make(events);
+  it("uses an allowance granted elsewhere after a rejected approval", async () => {
+    const { c } = make();
     await c.connect();
-    mock.write.mockRejectedValueOnce(Error("RPC disconnected"));
+    mock.write.mockRejectedValueOnce({ code: 4001 });
     await c.accountTransfer("fundToTrade", "10");
-    const read = mock.read.getMockImplementation()!;
-    mock.read.mockImplementation(async (call) =>
-      call.functionName === "allowance" ? 10000000n : read(call),
-    );
+    approvedAllowance = 10000000n;
     await c.continueTransfer();
-    expect(mock.write).toHaveBeenCalledOnce();
-    expect(c.getSnapshot().continuation?.transferFlow?.step).toBe("deposit");
-    expect(events.filter((e) => e.type === "operationSubmitted")).toHaveLength(
-      0,
-    );
+    expect(mock.write.mock.calls.map(([call]) => call.functionName)).toEqual([
+      "approve",
+      "depositFor",
+    ]);
+    expect(mock.receipt).not.toHaveBeenCalled();
   });
   it("does not perform backend login or personal_sign", async () => {
     const { c, wallet } = make();
@@ -1402,3 +1401,93 @@ it("does not mistake zero combined activation allocation for paid activation", a
   );
   expect((await c.creationReadiness()).ready).toBe(false);
 });
+
+it("repayment retains a submitted top-up through a rejection and emits distinct steps", async () => {
+  const read = mock.read.getMockImplementation()!;
+  let arrived = false;
+  mock.read.mockImplementation(async (call) => {
+    if (call.functionName === "getAccountRuntimeStatus")
+      return {
+        ...(await read(call)),
+        availableAssetBalance: arrived ? 42558294n : 127652n,
+        totalRealtimeDebtNow: 42558294n,
+      };
+    if (call.functionName === "previewRepay")
+      return { repayableAmount: 42558294n };
+    return read(call);
+  });
+  mock.receipt.mockImplementation(async () => {
+    arrived = true;
+    return { status: "success" };
+  });
+  mock.sign.mockRejectedValueOnce({ code: 4001 });
+  const events: WidgetEvent[] = [];
+  const { c } = make(events);
+  await c.connect();
+  await c.repay("42.558294");
+  expect(c.getSnapshot().continuation?.repayFlow).toMatchObject({
+    step: "repay",
+    topupHash: hash,
+  });
+  expect(c.getSnapshot().operation?.stage).toBe("awaitingAction");
+  await c.accountTransfer("accountToFund", "1");
+  expect(c.getSnapshot().continuation?.repayFlow?.topupHash).toBe(hash);
+  expect(mock.write).toHaveBeenCalledTimes(1);
+  await c.repay("42.558294");
+  expect(mock.write).toHaveBeenCalledTimes(2);
+  expect(c.getSnapshot().continuation).toBeUndefined();
+  expect(c.getSnapshot().operation?.stage).toBe("success");
+  expect(events.filter((e) => e.type === "operationSubmitted")).toMatchObject([
+    { action: "repay", repayStep: "topup" },
+    { action: "repay", repayStep: "repay" },
+  ]);
+});
+
+it.each(["destroy", "close"])(
+  "blocks duplicate repayments and stops continuation after %s",
+  async (reason) => {
+    const read = mock.read.getMockImplementation()!;
+    mock.read.mockImplementation(async (call) => {
+      if (call.functionName === "getAccountRuntimeStatus")
+        return {
+          ...(await read(call)),
+          availableAssetBalance: 127652n,
+          totalRealtimeDebtNow: 42558294n,
+        };
+      if (call.functionName === "previewRepay")
+        return { repayableAmount: 42558294n };
+      return read(call);
+    });
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    mock.receipt.mockImplementation(async () => {
+      entered();
+      await pending;
+      return { status: "success" };
+    });
+    const { c } = make();
+    await c.connect();
+    const first = c.repay("42.558294");
+    await waiting;
+    await expect(c.repay("42.558294")).rejects.toMatchObject({
+      code: "OPERATION_BUSY",
+    });
+    if (reason === "destroy") c.destroy();
+    else c.resetRepayment();
+    release();
+    await first;
+    if (reason === "close") {
+      expect(c.getSnapshot().continuation).toBeUndefined();
+      expect(c.getSnapshot().operation).toBeUndefined();
+      expect(c.getSnapshot().busy).toBe(false);
+    }
+    expect(mock.sign).not.toHaveBeenCalled();
+    expect(mock.write).toHaveBeenCalledTimes(1);
+  },
+);

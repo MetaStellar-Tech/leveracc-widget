@@ -55,7 +55,9 @@ for (const action of ["Borrow", "Repay", "Transfer", "Create", "Bind"]) {
     const retry =
       action === "Transfer"
         ? dialog.getByRole("button", { name: "Continue transfer", exact: true })
-        : submit;
+        : action === "Repay"
+          ? dialog.getByRole("button", { name: "Retry repayment", exact: true })
+          : submit;
     await expect(retry).toBeEnabled();
     await toast.getByRole("button").click();
     await expect(toast).toHaveCount(0);
@@ -171,7 +173,7 @@ test("withdrawal continuation reviews higher fees in the original fields", async
   await expect(dialog.locator(".primary")).toBeDisabled();
 });
 
-for (const action of ["Transfer", "Deposit", "Withdraw"]) {
+for (const action of ["Deposit", "Withdraw"]) {
   test(`${action} can cancel after approval and reopen to continue`, async ({
     page,
   }) => {

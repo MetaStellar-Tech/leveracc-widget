@@ -181,13 +181,15 @@ const config = {
 - **Withdraw 提现**：独立 `withdraw` 开关，选择 Fund 或 Trade 来源并提现至 owner 的 Arbitrum 钱包。主网对应 HyperEVM 999 → Arbitrum One 42161；测试网对应 HyperEVM 998 → Arbitrum Sepolia 421614。默认 RPC、原生 USDC、Circle 合约、费用 API 和 intent 链 ID 均跟随 `network`。Trade MAX 为 `max(0, min(safeUserClaimable, EVM + max(Core Spot - 0.005 USDC, 0) - payableInterestNow))`。Core Spot 使用 Hyperliquid spot API，将 total 和 hold 分别截断到六位小数后相减。补足 EVM 时同时预留利息与提现金额。`arbitrumWithdrawalEnabled` 默认启用；不支持的部署可显式设为 `false`，界面会说明不可用原因。预览仍须允许足额转出。Fund 直接通过 Circle 授权、跨链。每笔交易发出后即结束，不恢复历史交易。打开或重新打开弹窗、提交交易后，重新读取来源余额／额度和 owner 的目标网络 USDC 余额。Trade 显示“可提现”，Fund 显示钱包余额。读取失败显示不可用，不视作零余额；重新打开弹窗可重试。费用参数在当前控件生命周期内按网络和方向缓存，输入金额时本地计算，不刷新余额或禁用输入框。提交前重新核验费用；费用上涨需重新确认。提交状态不占用提现弹窗布局，错误通过悬浮提示展示。最新费用和到账金额更新在原有字段中，通过主按钮确认下一次尝试，不显示独立核对区块。取消钱包确认后保留当前步骤，关闭并重新打开弹窗也能继续，不会重复已提交的步骤。
 - 创建后的 TradeAccount 使用顶部静态交易账户卡展示地址、抵押品、已借款、交易可用额及风险指标。`features.tradingAccount` 控制地址复制按钮；抵押品 info 支持 hover、键盘和触屏查看 HyperEVM / HyperCore 分布。不下单，不创建、刷新或配置 Execution/Risk API Wallet。
 - 项目切换须明确确认；负债、借款批次、待结算 Gas 债务或生命周期动作会阻止切换。
-- **Account Transfer：Fund → Trade** 对齐 dapp：必要时先授权 Core Deposit Wallet，再 `depositFor` 到 Trade Core Spot。首次 Core 激活时经过 owner Core 中转；owner Core 必须已激活且保留至少 1.005 USDC，转入金额须大于 1 USDC，最低到账扣除 1 USDC 激活费用。
-- **Account Transfer：Trade → Fund** 优先使用 Trade EVM；不足部分从 Core Spot 回 EVM，到账后再签名提现至 owner HyperEVM。可用 Core 余额扣除 0.005 USDC dust。每个需要钱包的后续步骤均显示“继续划转”。
+- **Account Transfer：Fund → Trade** 对齐 dapp：必要时先授权 Core Deposit Wallet，等待授权确认后自动 `depositFor` 到 Trade Core Spot。首次 Core 激活时经过 owner Core 中转；owner Core 必须已激活且保留至少 1.005 USDC，转入金额须大于 1 USDC，最低到账扣除 1 USDC 激活费用。
+- **Account Transfer：Trade → Fund** 优先使用 Trade EVM；不足部分从 Core Spot 回 EVM，到账后再签名提现至 owner HyperEVM。可用 Core 余额扣除 0.005 USDC dust。移动 Core 资金前，提现预览必须允许足额转出。Core 可用余额读取 Hyperliquid Spot API（`total - hold`，两者分别截断至六位小数）。Core 补款或 owner Core 中转入金提交后，每 2 秒检查中间交易回执及所需余额，合计最多等待 90 秒（含 RPC 耗时）；Trade → Fund 到账后自动刷新账户状态并请求最终 WithdrawIntent 签名；owner Core 中转入金仍显示“继续划转”。超时或读取失败后重试先检查原中间交易及余额，Trade → Fund 随后自动继续提现。最终划转在提交后结束。广播结果未知时保持锁定；明确拒签或回滚后可重试。授权确认自动进入入金。`transferFlow.submission.phase` 表示 `ready`、`waiting`、`check`、`unknown` 或 `submitted`。Account Transfer 弹窗打开期间，待处理步骤不能被另一笔交易替换。关闭弹窗会清除中间状态并停止自动衔接；重新打开时清空金额，重新读取余额及合约上限。已提交的链上交易不受影响，已到账的 EVM 资金可直接转出。弹窗外不展示 Account Transfer 进度入口。
+- Trade → Fund 展示合约允许的可提现金额：`max(0, min(previewSafeUserClaimablePrimaryDirect(0), EVM + max(Core Spot - 0.005 USDC, 0) - payableInterestNow))`。MAX 在该金额基础上扣除 0.1% 缓冲（向上取整至六位小数），最低预留 0.005 USDC，结果不小于零。该缓冲额外叠加在已有利息与 Core dust 预留之上。手动输入金额仍按实时合约上限校验。合约上限包含债务和仓位限制；账面余额不等于可转资金。Core 补款覆盖转出金额及利息预留。移动资金前和最终转出前都会重新检查上限与足额到账预览。上限读取失败时禁止提交，不回退到余额相加。Fund → Trade 不依赖提现上限查询。 账户存在应付利息且需要 Core 补款时，还会从剩余可转 Core 资金中额外预留最多 0.005 USDC，以覆盖利息增长。到账检查使用固定的 EVM 补款目标，不追逐持续增长的利息目标。补款到账后自动重新校验 nonce、项目绑定、当前上限、利息及足额到账预览，签署 EIP-712 `WithdrawIntent`，再调用 `withdraw(intent, signature)` 转至 owner 的 HyperEVM 钱包。仅完成 Core 补款不会使 Fund 到账。
 - 账户详情及其“其他账户划转”、全额还款快捷入口已移除；协议层划转和还款 API 仍保留。
 - 充值支持 owner HyperCore Spot → owner HyperEVM Fund，以及 Arbitrum → owner HyperEVM Fund（主网：Arbitrum One 42161 → HyperEVM 999；测试网：Arbitrum Sepolia 421614 → HyperEVM Testnet 998）。测试网可在 Deposit 弹窗选择“外部充值”，使用 Arbitrum Sepolia 原生测试 USDC 和 ETH 支付 gas；费用查询使用 Circle sandbox，授权和跨链合约均匹配测试网。原有 Fund → Trade EVM 的控制器方法保留；主界面通过 Account Transfer 为 Trade 充值。
 - 借款使用链上额度、风险参数、nonce 和费率版本；输入金额后在原表单内显示利率、期限与费用上限，费率变化需重新确认。借入 USDC 到达 Trade EVM。
-- 还款使用 Trade EVM 余额；全额还款包含 0.1% 利息授权缓冲，实际扣款由实时债务限制。余额不足时提示先划转。
-- 所有交易返回 hash 或 Core 确认提交后发出 `operationSubmitted`，提交不代表执行成功。开户及其 Gas 充值额外跟踪确认和到账；其他交易流程仍在提交时结束。
+- 还款使用 Trade EVM 的 USDC，余额不足时自动从 Core Spot 可用余额补足，并在 Core 预留 0.005 USDC。可还金额取实时债务与上述合计资金的较小值。部分和全额还款预览均增加输入金额的 0.1%，向上取整至六位小数；全额还款以输入金额和实时债务的较大值为基数。部分还款签名使用预览的可还金额。点击“当前已借”（Current Borrowed）选择全额还款，填入实时债务加 0.1%（向上取整至六位小数）。全额还款在 Core → EVM 补款目标及最终签名中保留该预留，不再截回预览债务；合约仅扣实时债务，多余 USDC 留在交易账户 EVM。可用资金必须覆盖预留金额。重试沿用最初确定的请求上限。Core 补款最多等待 90 秒确认，再每 2 秒检查 EVM 到账，最多等待 90 秒。到账后刷新 nonce、绑定及债务，再请求还款签名。最终还款最多等待 90 秒确认；重试检查同一哈希，不重新签名。还款回滚后可重新签名。超时、读取失败及拒签保留当前 widget 实例内的步骤；重试检查已提交的补款，不重复发送。补款回滚后可重新计算；没有哈希且提交结果未知时，需先检查钱包再开始另一笔还款。开始另一笔 widget 交易前需先完成待处理还款。还款进度仅在当前弹窗内复用。关闭后清除金额和中间步骤并停止自动衔接；重新打开时读取最新债务和余额，可直接使用已到账的 EVM 资金。等待确认及到账期间允许关闭，钱包签名或广播期间需先完成当前钱包操作。已提交的链上交易不受影响，弹窗外不展示还款进度入口。切换账户、网络、项目或销毁 widget 会停止自动衔接。
+- 还款保留 `repay(amount, full)` 控制器 API。`OperationRecord.repayFlow` 记录全额还款模式（`full`）、固定金额、补款金额、步骤及交易哈希。还款进度与提交事件增加 `repayStep`（`topup`、`confirming`、`arrival`、`repay`、`repayConfirming` 或 `complete`）；`topup` 提交不表示还款完成。每笔已提交交易分别发出事件。
+- 所有交易返回 hash 或 Core 确认提交后发出 `operationSubmitted`，提交不代表执行成功。开户及其 Gas 充值额外跟踪确认和到账；Account Transfer 等待中间步骤满足条件，Repay 等待补款到账及最终还款回执；其他最终交易仍在提交时结束。
 
 ## 事件与恢复
 
@@ -197,7 +199,7 @@ const config = {
 
 弹窗不显示交易状态块和交易浏览器链接，保留按钮进度及必要的多步操作引导。最后一笔交易发出后，表单清空金额、全额还款选项及临时输入提示，保留所选路径。授权和中间步骤、钱包取消及失败均保留输入，以便继续或重试。失败通过悬浮提示显示错误并允许重试；`onEvent` 提供 `operationProgress`、`operationSubmitted` 和 `error` 供宿主处理。
 
-事件包含项目、网络、已知 owner / account，以及操作的 `operationId`、`action`、`stage` 和已知 hash。`operationSubmitted` 的阶段为 `submitted`，每笔提交仅发送一次；`action: "gasFunding"` 表示内置 Gas 充值。`awaitingAction` 表示可以手动继续或重试下一步，不表示到账。旧 `operationSuccess`、`success`、`confirming`、`bridging`、`settling` 类型保留并弃用，不再发送；接入方须将提交反馈迁移到 `operationSubmitted`。
+事件包含项目、网络、已知 owner / account，以及操作的 `operationId`、`action`、`stage` 和已知 hash。`operationSubmitted` 的阶段为 `submitted`，每笔提交仅发送一次；`action: "gasFunding"` 表示内置 Gas 充值。`awaitingAction` 表示可以手动继续或重试下一步，不表示到账。还款等待最终回执时发送 `stage: "confirming"` 的 `operationProgress`，确认成功后才发送 `stage: "success"`。旧 `operationSuccess`、`bridging`、`settling` 类型保留并弃用，不再发送；接入方须将提交反馈迁移到 `operationSubmitted`。
 
 缺少链上交易授权、风险钱包、项目绑定或 Core 激活时显示具体阻塞原因，并发出 `accountActionRequired`。宿主可自行处理后调用 `refresh()`，widget 不调用宿主业务 API。
 

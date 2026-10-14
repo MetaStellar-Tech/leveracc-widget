@@ -1,3 +1,9 @@
+import { readTradeWithdrawalBalance } from "../protocol/trade-withdrawal-balance";
+import {
+  submitAccountTransfer,
+  transferState,
+} from "../protocol/account-transfer-submission";
+import { executeRepayment } from "../protocol/repay-flow";
 import { creationFlow, creationAmount } from "../protocol/creation-policy";
 import {
   listConversions,
@@ -51,13 +57,7 @@ import {
   same,
   type AccountState,
 } from "../protocol/account";
-import {
-  borrow,
-  repay,
-  deposit,
-  transfer,
-  readBorrowRate,
-} from "../protocol/funds";
+import { borrow, deposit, transfer, readBorrowRate } from "../protocol/funds";
 import {
   clearLegacyTransactions,
   terminal,
@@ -585,7 +585,8 @@ export class WidgetController {
         continuation:
           stage === "awaitingAction"
             ? { ...op }
-            : this.state.continuation?.id === op.id && stage === "submitted"
+            : this.state.continuation?.id === op.id &&
+                (stage === "submitted" || stage === "success")
               ? undefined
               : this.state.continuation,
       });
@@ -594,6 +595,7 @@ export class WidgetController {
       ...op,
       type: stage === "submitted" ? "operationSubmitted" : "operationProgress",
       operationId: op.id,
+      ...(op.repayFlow ? { repayStep: op.repayFlow.step } : {}),
     });
   }
   private matches(op: EventContext) {
@@ -647,9 +649,20 @@ export class WidgetController {
       await withOperationLock(context, async () => {
         const previous = this.state.continuation;
         invariant(
+          (!previous?.repayFlow || action === "repay") &&
+            (!previous?.transferFlow?.submission ||
+              (action === "transfer" && resume)),
+          "OPERATION_PENDING",
+          config.locale === "zh"
+            ? "请先完成待处理操作，再开始另一笔交易。"
+            : "Complete the pending operation before starting another transaction.",
+        );
+        invariant(
           !resume ||
             (previous?.stage === "awaitingAction" &&
-              (previous.transferFlow || previous.arbitrumWithdrawal) &&
+              (previous.transferFlow ||
+                previous.arbitrumWithdrawal ||
+                previous.repayFlow) &&
               previous.action === action &&
               same(previous.account, account)),
           "OPERATION_PENDING",
@@ -740,6 +753,7 @@ export class WidgetController {
             ? await readAccount(port, config, owner, account)
             : undefined;
           await work(port, config, owner, s, op, progress);
+          if (!didSubmit && op.repayFlow?.step === "complete") return;
           if (!didSubmit) {
             if (op.transferFlow || op.arbitrumWithdrawal)
               progress("awaitingAction");
@@ -747,7 +761,9 @@ export class WidgetController {
               this.patch({ operation: undefined });
             return;
           }
-          if (op.transferFlow) {
+          if (op.transferFlow?.submission) {
+            // This flow advances only after its prerequisite confirmation/arrival.
+          } else if (op.transferFlow) {
             const next = advanceAccountTransfer(op);
             if (next === "awaitingAction") progress(next);
           } else if (op.arbitrumWithdrawal?.step === "topup") {
@@ -766,11 +782,13 @@ export class WidgetController {
             op.error +=
               " Submission result is unknown. Check your wallet before retrying.";
           progress(
-            didSubmit
-              ? "submitted"
-              : op.transferFlow || op.arbitrumWithdrawal
-                ? "awaitingAction"
-                : "failed",
+            op.repayFlow || op.transferFlow?.submission
+              ? "awaitingAction"
+              : didSubmit
+                ? "submitted"
+                : op.transferFlow || op.arbitrumWithdrawal
+                  ? "awaitingAction"
+                  : "failed",
           );
           e.message = op.error ?? e.message;
           this.report(e, context, op, generation);
@@ -958,17 +976,27 @@ export class WidgetController {
       );
     });
   repay = (amount: string, full = false) =>
-    this.run("repay", async (port, config, owner, s) => {
-      invariant(s, "ACCOUNT_REQUIRED", "Create a Trading Account first.");
-      await repay(
-        port,
-        config,
-        owner,
-        s,
-        full ? s.balances.debt : parseAmount(amount),
-        full,
-      );
-    });
+    this.run(
+      "repay",
+      async (port, config, owner, s, op, progress) => {
+        invariant(s, "ACCOUNT_REQUIRED", "Create a Trading Account first.");
+        await executeRepayment(
+          port,
+          config,
+          owner,
+          s,
+          op,
+          op.repayFlow
+            ? BigInt(op.repayFlow.amount)
+            : full
+              ? s.balances.debt
+              : parseAmount(amount),
+          full,
+          progress,
+        );
+      },
+      this.state.continuation?.action === "repay",
+    );
   deposit = (amount: string) =>
     this.run("deposit", async (port, _config, owner, s) => {
       invariant(s, "ACCOUNT_REQUIRED", "Create a Trading Account first.");
@@ -1164,12 +1192,59 @@ export class WidgetController {
       async () => estimate,
     );
   }
+  resetAccountTransfer = () => this.resetModalOperation("transfer");
+  resetRepayment = () => this.resetModalOperation("repay");
+  private resetModalOperation(action: "transfer" | "repay") {
+    if (
+      this.state.operation?.action !== action &&
+      this.state.continuation?.action !== action
+    )
+      return;
+    // Invalidate pending reads, waits and wallet continuations from the closed modal.
+    this.generation++;
+    this.refreshVersion++;
+    this.patch({
+      operation:
+        this.state.operation?.action === action
+          ? undefined
+          : this.state.operation,
+      continuation:
+        this.state.continuation?.action === action
+          ? undefined
+          : this.state.continuation,
+      busy: false,
+      error: undefined,
+    });
+    void this.refresh();
+  }
+  accountTransferBalances = (
+    direction: "fundToTrade" | "accountToFund" = "fundToTrade",
+  ) =>
+    this.sharedRead("account-transfer-balances:" + direction, async () => {
+      const { owner, account } = this.state;
+      invariant(
+        owner && account,
+        "ACCOUNT_REQUIRED",
+        "Create an account first.",
+      );
+      const port = this.port(this.config, owner, account, this.generation);
+      const s = await transferState(
+        port,
+        await readAccount(port, this.config, owner, account),
+      );
+      const withdrawal =
+        direction === "accountToFund"
+          ? await readTradeWithdrawalBalance(port, account)
+          : undefined;
+      return { ...s.balances, withdrawable: withdrawal?.maximum };
+    });
   accountTransfer = (
     direction: "fundToTrade" | "accountToFund",
     amount: string,
   ) =>
-    this.run("transfer", async (port, config, owner, s, op) => {
+    this.run("transfer", async (port, config, owner, s, op, progress) => {
       invariant(s, "ACCOUNT_REQUIRED", "Create a Trading Account first.");
+      s = await transferState(port, s);
       op.transferFlow = await prepareAccountTransfer(
         port,
         config,
@@ -1177,18 +1252,24 @@ export class WidgetController {
         s,
         direction,
         parseAmount(amount),
+        true,
       );
-      await executeAccountTransfer(port, config, owner, s, op.transferFlow);
+      op.transferFlow.submission = { phase: "ready" };
+      await submitAccountTransfer(port, config, owner, s, op, progress);
     });
   continueTransfer = (reviewedMinimum?: bigint) =>
     this.run(
       this.state.continuation?.action === "withdraw" ? "withdraw" : "transfer",
-      async (port, config, owner, s, op) => {
+      async (port, config, owner, s, op, progress) => {
         invariant(
           s && op.transferFlow,
           "ACCOUNT_REQUIRED",
           "Refresh account state first.",
         );
+        if (op.transferFlow.submission) {
+          await submitAccountTransfer(port, config, owner, s, op, progress);
+          return;
+        }
         if (reviewedMinimum !== undefined) {
           invariant(
             op.action === "withdraw" && op.transferFlow.step === "withdraw",

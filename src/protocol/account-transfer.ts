@@ -1,3 +1,4 @@
+import { readTradeWithdrawalBalance } from "./trade-withdrawal-balance";
 import type { Address } from "viem";
 import type { OperationRecord, Stage } from "../types";
 import type { ProtocolPort } from "./port";
@@ -61,6 +62,7 @@ export async function prepareAccountTransfer(
   s: AccountState,
   direction: "fundToTrade" | "accountToFund",
   amount: bigint,
+  liveCore = false,
 ): Promise<NonNullable<OperationRecord["transferFlow"]>> {
   const target = await readOwnerCore(port, s.registry, s.account);
   const base = {
@@ -74,7 +76,22 @@ export async function prepareAccountTransfer(
     completedHashes: [],
   };
   if (direction === "accountToFund") {
-    const plan = withdrawalPlan(amount, s.balances.evm, s.balances.spot);
+    const balance = liveCore
+      ? await readTradeWithdrawalBalance(port, s.account)
+      : undefined;
+    if (balance)
+      invariant(
+        amount > 0n && amount <= balance.maximum,
+        "WITHDRAW_RESTRICTED",
+        config.locale === "zh"
+          ? "金额超过合约当前允许的可转余额（已计入债务、仓位限制及利息预留）。"
+          : "Amount exceeds the contract withdrawable balance after debt, position limits and interest reserves.",
+      );
+    const plan = withdrawalPlan(
+      amount + (balance?.interest ?? 0n),
+      balance?.evm ?? s.balances.evm,
+      balance?.core ?? s.balances.spot,
+    );
     invariant(
       plan.feasible,
       "INSUFFICIENT_BALANCE",
@@ -96,6 +113,8 @@ export async function prepareAccountTransfer(
   const destination = relay
     ? await readOwnerCore(port, s.registry, owner)
     : target;
+  if (liveCore && relay)
+    destination.available = await port.coreSpotBalance(owner);
   invariant(
     !relay || destination.exists,
     "CORE_ACTIVATION_REQUIRED",
@@ -131,6 +150,20 @@ export async function executeAccountTransfer(
   flow: NonNullable<OperationRecord["transferFlow"]>,
 ) {
   const amount = BigInt(flow.amount);
+  const withdrawal =
+    flow.submission && flow.direction === "accountToFund"
+      ? await readTradeWithdrawalBalance(port, s.account)
+      : undefined;
+  if (withdrawal)
+    invariant(
+      amount > 0n && amount <= withdrawal.maximum,
+      "WITHDRAW_RESTRICTED",
+      config.locale === "zh"
+        ? "金额超过合约当前允许的可转余额，请重新检查债务和仓位限制。"
+        : "Amount exceeds the current contract withdrawable balance. Review debt and position limits.",
+    );
+  const required = amount + (withdrawal?.interest ?? 0n);
+  const availableEvm = withdrawal?.evm ?? s.balances.evm;
   switch (flow.step) {
     case "approval":
       if (
@@ -177,6 +210,7 @@ export async function executeAccountTransfer(
     }
     case "relay": {
       const source = await readOwnerCore(port, s.registry, owner);
+      if (flow.submission) source.available = await port.coreSpotBalance(owner);
       invariant(
         source.available >= amount + ACTIVATION_FEE + CORE_DUST,
         "CORE_RESERVE_REQUIRED",
@@ -185,19 +219,32 @@ export async function executeAccountTransfer(
       await port.sendCore(s.account, formatAmount(amount));
       break;
     }
-    case "topup":
-      flow.topup = (
-        amount > s.balances.evm ? amount - s.balances.evm : 0n
-      ).toString();
+    case "topup": {
+      const shortfall = required > availableEvm ? required - availableEvm : 0n;
+      const spareCore = withdrawal
+        ? coreTransferable(withdrawal.core) - shortfall
+        : 0n;
+      const buffer =
+        shortfall > 0n &&
+        withdrawal &&
+        withdrawal.interest > 0n &&
+        spareCore > 0n
+          ? spareCore < CORE_DUST
+            ? spareCore
+            : CORE_DUST
+          : 0n;
+      flow.baseline = availableEvm.toString();
+      flow.topup = (shortfall + buffer).toString();
       if (flow.topup === "0") {
         flow.step = "withdraw";
         return;
       }
       await transfer(port, config, owner, s, "coreToEvm", BigInt(flow.topup));
       break;
+    }
     case "withdraw":
       invariant(
-        s.balances.evm >= amount,
+        availableEvm >= required,
         "EVM_BALANCE_REQUIRED",
         "Trade EVM balance is not sufficient yet. Try continuing again later.",
       );
