@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-[npm 接入指南](docs/NPM_INTEGRATION.zh-CN.md) · [钱包接入](docs/WALLET_INTEGRATION.zh-CN.md) · [发布流程](docs/RELEASING.zh-CN.md) · [独立 npm 示例](examples/npm/README.zh-CN.md) · [创建前配置](#创建前的-gas-兑换与激活)
+[npm 接入指南](docs/NPM_INTEGRATION.zh-CN.md) · [钱包接入](docs/WALLET_INTEGRATION.zh-CN.md) · [发布流程](docs/RELEASING.zh-CN.md) · [独立 npm 示例](examples/npm/README.zh-CN.md) · [创建前配置](#创建前的-gas-兑换与激活) · [Gasless ETH 兑换](#创建前-gasless-兑换-arbitrum-eth) · [项目方配置](#项目切换信息)
 
 独立的 React / JavaScript 账户与借贷组件，使用接入方提供的 EIP-1193 钱包。**不需要 v1 API、登录会话、Cookie 或后端账户注册。** 账户真值来自 Factory 与链上状态；Core 余额通过协议 read adapter 查询，首次入金中转通过 Hyperliquid SDK 签名执行。
 
@@ -108,6 +108,8 @@ widget.destroy(); // 可重复调用
 | `protocolServiceUrl` | 按网络预设 | Protocol Service 地址，用于查询创建前的历史充值记录 |
 | `creationGasConversionEnabled` | `true` | 开启创建前 Gas 兑换与固定 HYPE 门槛；仅接受布尔值 |
 | `creationAccountActivationEnabled` | `true` | 开启创建前激活付款条件；仅接受布尔值 |
+| `creationGaslessEthEnabled` | `false` | 在内置创建付款前提供 Gasless Arbitrum ETH 兑换；仅接受布尔值 |
+| `creationGaslessEthAmountUsdc` | `"1"` | 兑换 ETH 所花费的 USDC；正数十进制字符串，最多六位小数 |
 | `skipCreationTopUpCheck` | `false` | 跳过 Gas 付款历史；开启 Gas 兑换时仍要求 HYPE，兼容规则见下文；仅接受布尔值 |
 | `rpcUrl`                      | 网络预设                   | 同网络 HyperEVM RPC                                                      |
 | `arbitrumRpcUrl` | 对应网络的 Arbitrum 预设 | 主网使用 Arbitrum One（42161）；测试网使用 Arbitrum Sepolia（421614） |
@@ -155,6 +157,30 @@ const config = {
 弹窗保留现有准备与创建步骤、按钮位置和自动轮询，仅按模式调整文案及金额；两项都关闭时隐藏准备步骤，仅显示创建账户步骤。不增加用户模式选择器。主网使用 Arbitrum USDC，测试网使用 HyperCore Spot。
 
 详见[钱包接入中的订单与恢复说明](docs/WALLET_INTEGRATION.zh-CN.md#创建前的-gas-兑换与激活)。
+
+### 创建前 Gasless 兑换 Arbitrum ETH
+
+设置 `creationGaslessEthEnabled: true` 后，当 Fund Account（当前连接的 owner 钱包）的 Arbitrum ETH 不足以支付下一笔创建付款的 Gas 时，弹窗提供免 Gas 的 USDC → ETH 兑换。此开关默认为 `false`。`creationGaslessEthAmountUsdc` 默认为 `"1"`，必须是正数 USDC 十进制字符串，最多六位小数。金额由集成方设置，用户无法在弹窗修改。此金额表示花费的 USDC，并非保证获得的 ETH 数量。
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "zh",
+  creationGaslessEthEnabled: true,
+  creationGaslessEthAmountUsdc: "1",
+} as const;
+```
+
+Widget 估算实际 USDC 转账所需的 Gas，并增加 20% 余量，ETH 余额为零时也可检测。组合准备和仅兑换 Gas 流程额外保留 3 USDC，仅激活流程额外保留 1.1 USDC。例如，默认兑换 1 USDC 加组合准备至少需要 4 USDC。兑换受服务独立的 Gasless 最低和最高限额约束，最低金额至少为 0.2 USDC；金额不符合要求时显示错误，不会悄悄修改配置。
+
+该步骤仅适用于内置主网 Arbitrum 创建付款。测试网、无需付款、已完成付款，以及宿主提供 `onGasTopUp` 时跳过。它使用现有 `protocolServiceUrl` 和 `arbitrumRpcUrl`；后者需支持通过原生余额状态覆盖估算 Gas。打开弹窗不会发起兑换：用户点击后，签署钱包归属消息及服务的类型化交易／可选 Permit。本次兑换不需要链上授权交易。
+
+提交前，Widget 校验报价、钱包、链、代币、收款人、有效期、最低输出和可用 USDC。使用的接口为 `/api/v1/gas-top-ups/config`、`/prepare`、`/submit` 和 `/status/{trade_hash}`。待处理兑换在提交前保存，重新打开或刷新后恢复查询；提交结果不确定时查询状态，不自动重新提交。发起兑换需要浏览器存储和 Web Locks 支持。若服务受理兑换后保存新的交易哈希／查询凭证失败，Widget 仅在当前页面内保留这组信息。请保持该页面打开，恢复浏览器存储并等待自动状态检查完成保存后，再重新加载或关闭页面。恢复记录按网络、服务地址和钱包隔离；修改配置金额不会丢弃待处理兑换。当前服务的状态查询凭证在准备报价后 24 小时过期。保留本地记录或刷新不会续期，也不能保证过期后恢复；请保留记录并联系支持核实交易后再处理。状态接口返回 HTTP 401/403/404 或交易信息不匹配时，暂停自动轮询；保留待处理记录以防止重复提交，重新打开弹窗会触发新的检查。若本地限流在请求发送前阻止提交，稍后可以重试；HTTP 失败或超时则保留恢复跟踪。若用户签名期间已有足够的 ETH 到账，Widget 会取消尚未提交的兑换，不花费 USDC。
+
+检查条件期间，弹窗保持 Gasless 卡片展示并禁用按钮。收到已校验的报价后，在请求类型化签名前展示最低 ETH 到账金额。临时状态查询错误采用指数退避，最长 60 秒；服务端要求更长等待时间时遵循服务端间隔。确认终态后清除过时的提交错误提示。
+
+服务成功后，Widget 等待 ETH 到账并重新确认 Gas 足够，随后显示现有付款按钮。用户需明确操作以继续创建付款，该转账前还会再次检查 Gas。兑换不可用或 Gas 仍不足时，用户可以手动补充 Arbitrum ETH，并等待自动余额检查。临时错误会自动检查，明确失败后允许用户主动重试；待处理兑换必须先确定状态，才能再次提交兑换。
 
 ### 第三方集成的网络部署
 
@@ -393,3 +419,24 @@ function applyPlatformTheme(theme) {
 ```
 
 更新时传入完整 `config`；新的 `colors` 替换旧覆盖，不做跨更新深度合并。移除某字段即可恢复其主题默认值，移除 `colors.primary` 后仍会回退到 `primaryColor`（若提供）。React 请传入新的配置对象。仅换色不会关闭当前弹窗、清空输入或重新发起账户读取；各 widget 实例相互隔离。平台负责选择明暗模式和搭配文字对比色，组件不自动检测系统主题。可运行的 React 和 vanilla 示例均提供主题切换选项。
+
+## 项目切换信息
+
+切换弹窗显示原项目方和目标项目方、介绍、可复制的 ID，以及原项目方的借款与仓位管理链接。内置 LeverAcc 和 Owly 的信息。在 `WidgetConfig` 中设置 `projects`，即可按不区分大小写的 `projectId` 添加项目或覆盖内置项目。覆盖按字段合并，介绍按语言合并；后面的条目优先。未知 ID 显示“未知项目方”。展示信息不会改变目标 `projectId` 或交易校验。
+
+```ts
+const config = {
+  network: "mainnet",
+  projectId: "0xb5aa45fa7dc556ccc2af82c0a6bb44407b32634c9b384862a27ccae5486fef91",
+  locale: "zh",
+  projects: [{
+    projectId: "0xb5aa45fa7dc556ccc2af82c0a6bb44407b32634c9b384862a27ccae5486fef91",
+    name: "我的项目",
+    description: { en: "Trading and lending", zh: "交易与借贷" },
+    logo: "https://example.com/logo.png",
+    repayUrl: "https://example.com/loans",
+  }],
+} satisfies WidgetConfig;
+```
+
+每个条目必须包含 bytes32 格式的 `projectId`；`name`、`description`、`logo` 和 `repayUrl` 均为可选。URL 必须为不含凭据的绝对 HTTPS 地址，并原样使用。将 `logo` 或 `repayUrl` 设置为空字符串可移除内置值。缺少中文介绍时回退到英文。如果不希望从 `app.leveracc.xyz` 加载内置标志，请提供自己的标志 URL。这些字段同时支持 React 和 embed 配置。

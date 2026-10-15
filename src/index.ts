@@ -2,6 +2,7 @@ export { LeverAccWidget } from "./react";
 export type { LeverAccWidgetRef } from "./react";
 export type {
   WidgetConfig,
+  ProjectInfo,
   WidgetColors,
   WidgetOptions,
   WalletProvider,

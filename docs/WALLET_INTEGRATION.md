@@ -184,3 +184,27 @@ Pending payment records retain flow, amount, order ID, associated record ID and 
 Local tests cover SDK adapters, owner validation, SDK chain switching, adding unknown chains, disconnect / asynchronous cleanup, host wallet modal interaction, and fund flows. Real Privy login, WalletConnect sessions, and on-chain fund operations require your own app / project configuration and wallet. Passing builds or mock tests does not establish successful production integration.
 
 Official interfaces: [viem Wallet Client](https://viem.sh/docs/clients/wallet), [wagmi useConnect](https://wagmi.sh/react/api/hooks/useConnect), and [Privy wallet connection](https://docs.privy.io/wallets/connectors/usage/connect-or-create). The example SDK versions match the adjacent dapp.
+
+## Gasless Arbitrum ETH before creation
+
+Set `creationGaslessEthEnabled: true` to offer a gasless USDC → ETH exchange when the Fund Account (connected owner wallet) lacks enough Arbitrum ETH for the next creation payment. It defaults to `false`. `creationGaslessEthAmountUsdc` defaults to `"1"`; it is a positive USDC decimal string with up to six decimals. The integrator sets this amount; the user cannot edit it in the modal. This specifies USDC spent, not a guaranteed ETH amount.
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "en",
+  creationGaslessEthEnabled: true,
+  creationGaslessEthAmountUsdc: "1",
+} as const;
+```
+
+The widget estimates the actual USDC transfer and adds 20% gas headroom, including when the ETH balance is zero. It reserves an additional 3 USDC for combined preparation or Gas-only conversion, or 1.1 USDC for activation only. For example, the default 1 USDC exchange plus combined preparation requires at least 4 USDC. The service's independent gasless minimum and maximum apply, with a minimum of at least 0.2 USDC; invalid amounts are reported without silently changing the configuration.
+
+This step applies only to built-in mainnet Arbitrum creation payments. It is skipped on testnet, when no payment is required or payment is already complete, and when the host provides `onGasTopUp`. It uses the existing `protocolServiceUrl` and `arbitrumRpcUrl`; the latter must support gas estimation with a native balance state override. Opening the modal never starts an exchange: the user clicks and signs a wallet ownership message and the service's typed trade/optional permit. There is no on-chain approval transaction for this exchange.
+
+The widget validates the quote, wallet, chain, token, recipient, expiry, minimum output and available USDC before submission. It uses `/api/v1/gas-top-ups/config`, `/prepare`, `/submit` and `/status/{trade_hash}`. Pending exchanges are saved before submission and restored after reopening or refreshing; ambiguous submissions are checked by status and never automatically resubmitted. Browser storage and Web Locks support are required to start an exchange. If saving a new hash/credential pair fails after the service accepts the exchange, the widget retains it in the current page only. Keep that page open, restore browser storage and wait for the automatic status check to save the pair before reloading or closing the page. Recovery is isolated by network, service URL and wallet; changing the configured amount does not discard a pending exchange. The current service expires status credentials 24 hours after quote preparation. Keeping the local record or refreshing does not renew the credential or guarantee recovery after expiry; keep the record and contact support to verify the transaction before doing anything further. Status responses with HTTP 401/403/404 or mismatched trade details pause automatic polling; the pending record remains protected from resubmission and reopening the modal triggers a new check. A local cooldown that prevents the submit request from being sent allows a later retry; HTTP failures and timeouts retain recovery tracking. If sufficient ETH arrives while the user is signing, the widget cancels the unsubmitted exchange without spending USDC.
+
+While checking eligibility, the modal keeps the gasless card disabled. After a verified quote is received, it displays the minimum ETH output before requesting typed signatures. Transient status-query failures use exponential backoff up to 60 seconds, respecting longer server retry intervals. Confirmed terminal results clear stale submission warnings.
+
+After service success, the widget waits for ETH to arrive and checks gas sufficiency again before showing the existing payment button. The user then explicitly continues the creation payment. Gas is rechecked before that transfer. If exchange is unavailable or gas remains insufficient, users can add Arbitrum ETH manually and wait for the automatic balance check. Transient errors are checked automatically, and confirmed failures allow an explicit retry; pending exchanges must be resolved before another exchange is submitted.

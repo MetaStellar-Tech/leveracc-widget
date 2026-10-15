@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-[npm integration](docs/NPM_INTEGRATION.md) · [Wallet integration](docs/WALLET_INTEGRATION.md) · [Release process](docs/RELEASING.md) · [Standalone npm example](examples/npm/README.md) · [Creation configuration](#creation-gas-conversion-and-activation)
+[npm integration](docs/NPM_INTEGRATION.md) · [Wallet integration](docs/WALLET_INTEGRATION.md) · [Release process](docs/RELEASING.md) · [Standalone npm example](examples/npm/README.md) · [Creation configuration](#creation-gas-conversion-and-activation) · [Gasless ETH](#gasless-arbitrum-eth-before-creation) · [Project metadata](#project-switch-metadata)
 
 A standalone React / JavaScript account and lending widget that uses an integrator-provided EIP-1193 wallet. **No v1 API, login session, cookies, or backend account registration is required.** The Factory and on-chain state are the source of truth for accounts. Core balances are queried through the protocol read adapter, and the initial deposit relay is signed through the Hyperliquid SDK.
 
@@ -108,6 +108,8 @@ Without a build tool, host `dist/widget.js` and use the global `LeverAcc.mountLe
 | `protocolServiceUrl` | Network preset | Protocol Service URL for querying top-up history before account creation |
 | `creationGasConversionEnabled` | `true` | Enable creation Gas conversion and the fixed HYPE minimum; boolean only |
 | `creationAccountActivationEnabled` | `true` | Enable activation funding requirements before creation; boolean only |
+| `creationGaslessEthEnabled` | `false` | Offer gasless Arbitrum ETH exchange before built-in creation funding; boolean only |
+| `creationGaslessEthAmountUsdc` | `"1"` | USDC to exchange for ETH; positive decimal string, up to six decimals |
 | `skipCreationTopUpCheck` | `false` | Skip Gas payment history; HYPE is required when Gas conversion is enabled; see compatibility rules below; boolean only |
 | `rpcUrl` | Network preset | HyperEVM RPC for the same network |
 | `arbitrumRpcUrl` | Network-matched Arbitrum preset | Arbitrum One (42161) on mainnet; Arbitrum Sepolia (421614) on testnet |
@@ -155,6 +157,30 @@ Omitting both new switches preserves the complete legacy behavior, including `sk
 The modal keeps the existing preparation and creation steps, button placement, and automatic polling. Copy and amounts follow the selected mode, and both-off mode hides the preparation step and shows only account creation. There is no end-user mode selector. Mainnet uses Arbitrum USDC; testnet uses HyperCore Spot.
 
 See [order and recovery details in the wallet integration guide](docs/WALLET_INTEGRATION.md#creation-gas-conversion-and-activation).
+
+### Gasless Arbitrum ETH before creation
+
+Set `creationGaslessEthEnabled: true` to offer a gasless USDC → ETH exchange when the Fund Account (connected owner wallet) lacks enough Arbitrum ETH for the next creation payment. It defaults to `false`. `creationGaslessEthAmountUsdc` defaults to `"1"`; it is a positive USDC decimal string with up to six decimals. The integrator sets this amount; the user cannot edit it in the modal. This specifies USDC spent, not a guaranteed ETH amount.
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "en",
+  creationGaslessEthEnabled: true,
+  creationGaslessEthAmountUsdc: "1",
+} as const;
+```
+
+The widget estimates the actual USDC transfer and adds 20% gas headroom, including when the ETH balance is zero. It reserves an additional 3 USDC for combined preparation or Gas-only conversion, or 1.1 USDC for activation only. For example, the default 1 USDC exchange plus combined preparation requires at least 4 USDC. The service's independent gasless minimum and maximum apply, with a minimum of at least 0.2 USDC; invalid amounts are reported without silently changing the configuration.
+
+This step applies only to built-in mainnet Arbitrum creation payments. It is skipped on testnet, when no payment is required or payment is already complete, and when the host provides `onGasTopUp`. It uses the existing `protocolServiceUrl` and `arbitrumRpcUrl`; the latter must support gas estimation with a native balance state override. Opening the modal never starts an exchange: the user clicks and signs a wallet ownership message and the service's typed trade/optional permit. There is no on-chain approval transaction for this exchange.
+
+The widget validates the quote, wallet, chain, token, recipient, expiry, minimum output and available USDC before submission. It uses `/api/v1/gas-top-ups/config`, `/prepare`, `/submit` and `/status/{trade_hash}`. Pending exchanges are saved before submission and restored after reopening or refreshing; ambiguous submissions are checked by status and never automatically resubmitted. Browser storage and Web Locks support are required to start an exchange. If saving a new hash/credential pair fails after the service accepts the exchange, the widget retains it in the current page only. Keep that page open, restore browser storage and wait for the automatic status check to save the pair before reloading or closing the page. Recovery is isolated by network, service URL and wallet; changing the configured amount does not discard a pending exchange. The current service expires status credentials 24 hours after quote preparation. Keeping the local record or refreshing does not renew the credential or guarantee recovery after expiry; keep the record and contact support to verify the transaction before doing anything further. Status responses with HTTP 401/403/404 or mismatched trade details pause automatic polling; the pending record remains protected from resubmission and reopening the modal triggers a new check. A local cooldown that prevents the submit request from being sent allows a later retry; HTTP failures and timeouts retain recovery tracking. If sufficient ETH arrives while the user is signing, the widget cancels the unsubmitted exchange without spending USDC.
+
+While checking eligibility, the modal keeps the gasless card disabled. After a verified quote is received, it displays the minimum ETH output before requesting typed signatures. Transient status-query failures use exponential backoff up to 60 seconds, respecting longer server retry intervals. Confirmed terminal results clear stale submission warnings.
+
+After service success, the widget waits for ETH to arrive and checks gas sufficiency again before showing the existing payment button. The user then explicitly continues the creation payment. Gas is rechecked before that transfer. If exchange is unavailable or gas remains insufficient, users can add Arbitrum ETH manually and wait for the automatic balance check. Transient errors are checked automatically, and confirmed failures allow an explicit retry; pending exchanges must be resolved before another exchange is submitted.
 
 ### Network deployments for third-party integrations
 
@@ -393,3 +419,24 @@ function applyPlatformTheme(theme) {
 ```
 
 Pass the complete `config` when updating. New `colors` replace previous overrides without deep-merging across updates. Removing a field restores its theme default; removing `colors.primary` still falls back to `primaryColor` if supplied. In React, pass a new configuration object. Changing only colors does not close the current modal, clear inputs, or trigger new account reads; widget instances remain isolated. The platform selects light / dark mode and contrasting text colors; the widget does not automatically detect the system theme. The runnable React and vanilla examples both offer theme switching.
+
+## Project switch metadata
+
+The switch dialog shows the original and target project, descriptions, copyable IDs, and the original project's loan/position management link. LeverAcc and Owly metadata are included. Set `projects` in `WidgetConfig` to add projects or override built-in entries by case-insensitive `projectId`. Overrides merge field by field; descriptions merge by language. Later entries win. Unknown IDs display “Unknown project”. Metadata does not change the target `projectId` or transaction checks.
+
+```ts
+const config = {
+  network: "mainnet",
+  projectId: "0xb5aa45fa7dc556ccc2af82c0a6bb44407b32634c9b384862a27ccae5486fef91",
+  locale: "en",
+  projects: [{
+    projectId: "0xb5aa45fa7dc556ccc2af82c0a6bb44407b32634c9b384862a27ccae5486fef91",
+    name: "My project",
+    description: { en: "Trading and lending", zh: "交易与借贷" },
+    logo: "https://example.com/logo.png",
+    repayUrl: "https://example.com/loans",
+  }],
+} satisfies WidgetConfig;
+```
+
+Each entry requires a bytes32 `projectId`; `name`, `description`, `logo`, and `repayUrl` are optional. URLs must be absolute HTTPS URLs without credentials and are used unchanged. An empty `logo` or `repayUrl` removes that built-in value. Missing Chinese descriptions fall back to English. Supply your own logo URL if you do not want to load built-in logos from `app.leveracc.xyz`. These fields are available through both React and embed configuration.

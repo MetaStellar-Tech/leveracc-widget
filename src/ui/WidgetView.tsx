@@ -1,3 +1,4 @@
+import { ProjectSwitch } from "./ProjectSwitch";
 import { ErrorToast } from "./ErrorToast";
 import { useEffect, useState } from "react";
 import { colorStyles } from "./colors";
@@ -225,14 +226,18 @@ export function WidgetView({
             {enabled.length === 0 && <p className="note">{t.noFeatures}</p>}
             {s.reasons.includes("PROJECT_BINDING_REQUIRED") &&
               enabled.length > 0 && (
-                <div className="notice">
+                <div className="project-switch-notice">
+                  <span className="project-switch-notice-icon"><Icon name="info" size={16} /></span>
                   <p>{t.projectMismatch}</p>
                   <button
-                    className="text-button"
+                    className="project-switch-button"
+                    type="button"
+                    data-modal-trigger="bind"
+                    aria-haspopup="dialog"
                     disabled={m.busy || m.pending}
                     onClick={() => openModal("bind")}
                   >
-                    {t.switchProject}
+                    <span>{t.switchProject}</span>
                   </button>
                 </div>
               )}
@@ -262,6 +267,7 @@ export function WidgetView({
           theme={config.theme}
           locale={config.locale}
           variant={
+            open === "bind" ||
             open === "create" ||
             open === "borrow" ||
             open === "repay" ||
@@ -319,22 +325,9 @@ export function WidgetView({
               onDone={closeModal}
             />
           ) : open === "bind" ? (
-            <>
-              <p className="note">{t.switchInfo}</p>
-              <div className="account-detail">
-                <small>{t.currentProject}</small>
-                <code>{s.boundProjectId}</code>
-                <small>{t.targetProject}</small>
-                <code>{config.projectId}</code>
-              </div>
-              <button
-                className="primary"
-                disabled={m.busy || m.pending || s.status !== "ready"}
-                onClick={() => void m.invoke(() => c.bindProject())}
-              >
-                {t.confirm}
-              </button>
-            </>
+            <ProjectSwitch config={config} from={s.boundProjectId} busy={m.busy || m.pending}
+              disabled={m.busy || m.pending || s.status !== "ready"} onClose={closeModal}
+              onConfirm={() => void m.invoke(() => c.bindProject())} />
           ) : open === "borrow" ? (
             <LendingForm model={m} />
           ) : open === "repay" ? (

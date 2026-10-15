@@ -64,8 +64,10 @@ function App() {
     projectId: project as `0x${string}`,
     network: "testnet",
     locale: "en",
-    creationGasConversionEnabled: false,
-    creationAccountActivationEnabled: false,
+    // creationGasConversionEnabled: false,
+    // creationAccountActivationEnabled: false,
+    creationGaslessEthEnabled: true,
+    creationGaslessEthAmountUsdc: "1",
   });
   return (
     <main>

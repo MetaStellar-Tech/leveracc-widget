@@ -1,3 +1,8 @@
+import {
+  executeGasless,
+  gaslessReadiness,
+  type GaslessReadiness,
+} from "../protocol/gasless";
 import { readTradeWithdrawalBalance } from "../protocol/trade-withdrawal-balance";
 import {
   submitAccountTransfer,
@@ -213,6 +218,45 @@ export class WidgetController {
     }
   }
   setupAccount = () => this.hostAction("setup");
+  exchangeCreationEth = async (
+    isActive: () => boolean = () => true,
+    onQuote?: (minimum: string) => void,
+  ) => {
+    const config = this.config,
+      owner = this.state.owner,
+      provider = this.options.wallet,
+      generation = this.generation;
+    invariant(
+      config.creationGaslessEthEnabled &&
+        config.network === "mainnet" &&
+        creationFlow(config) !== "none" &&
+        this.usesBuiltInGasTopUp,
+      "GASLESS_UNAVAILABLE",
+      "Gasless ETH exchange is unavailable.",
+    );
+    invariant(
+      owner && provider,
+      "WALLET_NOT_CONNECTED",
+      "Connect the owner wallet first.",
+    );
+    invariant(
+      !this.state.busy && terminal(this.state.operation),
+      "OPERATION_BUSY",
+      "Wait for the current operation to finish.",
+    );
+    const current = () =>
+      generation === this.generation && !this.disposed && isActive();
+    this.patch({ busy: true });
+    try {
+      const readiness = await this.creationReadiness();
+      invariant(current(), "CONTEXT_CHANGED", "Wallet context changed.");
+      if (!readiness.gasless || readiness.gasless.ready) return;
+      await executeGasless(config, owner, provider, current, onQuote);
+    } finally {
+      if (generation === this.generation && !this.disposed)
+        this.patch({ busy: false });
+    }
+  };
   topUpGas = async () => {
     if (creationFlow(this.config) === "none") return;
     if (this.state.owner)
@@ -240,9 +284,19 @@ export class WidgetController {
     const key = gasFundingKey(config, owner);
     this.patch({ busy: true, error: undefined });
     try {
+      // Readiness may acquire the same lock to reconcile a completed exchange.
+      // Do that first; startGasFunding rechecks pending records and balances
+      // under the payment lock before it can send funds.
+      const readiness = await this.creationReadiness();
+      invariant(current(), "CONTEXT_CHANGED", "Wallet context changed.");
+      if (readiness.ready) return;
+      invariant(
+        !readiness.gasless || readiness.gasless.ready,
+        "INSUFFICIENT_GAS",
+        "Complete the Arbitrum ETH step before funding.",
+      );
       await withGasFundingLock(key, async () => {
-        const readiness = await this.creationReadiness();
-        if (readiness.ready) return;
+        invariant(current(), "CONTEXT_CHANGED", "Wallet context changed.");
         const submitted = await startGasFunding(
           config,
           provider,
@@ -349,7 +403,14 @@ export class WidgetController {
         this.config.creationGasConversionEnabled ||
       resolved.creationAccountActivationEnabled !==
         this.config.creationAccountActivationEnabled ||
-      resolved.creationLegacyMode !== this.config.creationLegacyMode;
+      resolved.creationLegacyMode !== this.config.creationLegacyMode ||
+      ((resolved.creationGaslessEthEnabled ||
+        this.config.creationGaslessEthEnabled) &&
+        next.onGasTopUp !== this.options.onGasTopUp) ||
+      resolved.creationGaslessEthEnabled !==
+        this.config.creationGaslessEthEnabled ||
+      resolved.creationGaslessEthAmountUsdc !==
+        this.config.creationGaslessEthAmountUsdc;
     this.detach();
     this.options = next;
     this.config = resolved;
@@ -904,7 +965,37 @@ export class WidgetController {
       "CONTEXT_CHANGED",
       "Wallet context changed.",
     );
+    const ready =
+      funding.state === "idle" &&
+      !funding.error &&
+      !creating &&
+      gasReady &&
+      activationSatisfied;
+    let gasless: GaslessReadiness | undefined;
+    if (
+      config.creationGaslessEthEnabled &&
+      config.network === "mainnet" &&
+      this.usesBuiltInGasTopUp &&
+      flow !== "none" &&
+      !creating &&
+      funding.state === "idle" &&
+      !funding.error &&
+      !ready &&
+      !(flow === "activation_only"
+        ? activations
+        : hasTopUp && activationSatisfied)
+    ) {
+      gasless = await gaslessReadiness(config, owner);
+    }
+    invariant(
+      generation === this.generation &&
+        !this.disposed &&
+        same(owner, this.state.owner),
+      "CONTEXT_CHANGED",
+      "Wallet context changed.",
+    );
     return {
+      gasless,
       gas,
       flow,
       activationSatisfied,

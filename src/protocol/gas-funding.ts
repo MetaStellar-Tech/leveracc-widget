@@ -1,3 +1,5 @@
+import { readGaslessFunding } from "./gasless-chain";
+import { loadGasless } from "./gasless-store";
 import { creationFlow, creationAmount } from "./creation-policy";
 import {
   paymentRequest,
@@ -305,12 +307,31 @@ export async function startGasFunding(
         "USDC transfer simulation failed.",
       );
       invariant(
-        eth >= gas * price * 2n,
+        config.creationGaslessEthEnabled || eth >= gas * price * 2n,
         "INSUFFICIENT_GAS",
         "Insufficient ETH for Arbitrum gas.",
       );
       await ensureOrder();
       const wallet = await signer(provider, owner, arbitrum, current);
+      if (config.creationGaslessEthEnabled) {
+        invariant(
+          loadGasless(config, owner)?.stage !== "submitted",
+          "FUNDING_PENDING",
+          "Gasless exchange is pending.",
+        );
+        const latest = await readGaslessFunding(
+          config,
+          owner,
+          route.receiver,
+          fundingAmount,
+        );
+        invariant(
+          latest.sufficient,
+          "INSUFFICIENT_GAS",
+          "Insufficient ETH for Arbitrum gas.",
+        );
+        await signer(provider, owner, arbitrum, current);
+      }
       markSubmitting();
       const hash = await wallet.writeContract({
         ...simulation.request,

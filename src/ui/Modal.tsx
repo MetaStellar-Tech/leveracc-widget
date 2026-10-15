@@ -37,6 +37,7 @@ export function Modal({
   closeBusyLabel?: string;
   children: ReactNode;
   variant?:
+    | "bind"
     | "default"
     | "create"
     | "borrow"
@@ -169,6 +170,7 @@ export function Modal({
                 )}
               </div>
             )}
+            {variant === "bind" && <span className="project-switch-emblem"><Icon name="transfer" size={20} /></span>}
             <h2 id={id}>{title}</h2>
             <button
               className="icon-button close"

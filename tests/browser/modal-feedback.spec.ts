@@ -40,7 +40,7 @@ for (const action of ["Borrow", "Repay", "Transfer", "Create", "Bind"]) {
         action === "Create"
           ? "Sign & Create Account"
           : action === "Bind"
-            ? "Confirm in wallet"
+            ? "Confirm switch"
             : action,
       exact: true,
     });

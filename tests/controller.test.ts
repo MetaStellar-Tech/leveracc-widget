@@ -1491,3 +1491,125 @@ it.each(["destroy", "close"])(
     expect(mock.write).toHaveBeenCalledTimes(1);
   },
 );
+
+describe("gasless creation scope", () => {
+  it.each(["disabled", "testnet", "host", "paid", "none"])(
+    "skips gasless checks for %s",
+    async (mode) => {
+      created = false;
+      const { c } = make();
+      c.update({
+        config: {
+          ...config,
+          network: mode === "testnet" ? "testnet" : "mainnet",
+          creationGaslessEthEnabled: mode !== "disabled",
+          ...(mode === "none"
+            ? {
+                creationGasConversionEnabled: false,
+                creationAccountActivationEnabled: false,
+              }
+            : {}),
+        },
+        ...(mode === "host" ? { onGasTopUp: async () => {} } : {}),
+      });
+      await c.connect();
+      mock.gas.mockResolvedValue(0n);
+      history(
+        mode === "paid"
+          ? [
+              {
+                requested_usdc_amount_raw: "3000000",
+                phase: "success",
+                terminal: true,
+              },
+            ]
+          : [],
+      );
+      const readiness = await c.creationReadiness();
+      expect(readiness.gasless).toBeUndefined();
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.some(([url]) => String(url).includes("/config")),
+      ).toBe(false);
+    },
+  );
+  it.each([
+    "creationGaslessEthEnabled",
+    "creationGaslessEthAmountUsdc",
+  ] as const)("invalidates checks when %s changes", async (key) => {
+    created = false;
+    const { c } = make();
+    await c.connect();
+    let resolve!: (value: bigint) => void;
+    mock.gas.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    history([]);
+    const pending = c.creationReadiness();
+    c.update({
+      config: {
+        ...config,
+        [key]: key === "creationGaslessEthEnabled" ? true : "0.5",
+      },
+    });
+    resolve(10000000000000000n);
+    await expect(pending).rejects.toThrow("Wallet context changed");
+  });
+});
+
+it("reconciles gasless readiness before taking the creation payment lock", async () => {
+  const { withGaslessLock } = await import("../src/protocol/gasless-store");
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, "locks");
+  const held = new Set<string>();
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: {
+      request: async (
+        key: string,
+        _options: unknown,
+        work: (lock: object | null) => Promise<unknown>,
+      ) => {
+        if (held.has(key)) return work(null);
+        held.add(key);
+        try {
+          return await work({});
+        } finally {
+          held.delete(key);
+        }
+      },
+    },
+  });
+  created = false;
+  const { c } = make();
+  c.update({
+    config: { ...config, network: "mainnet", creationGaslessEthEnabled: true },
+  });
+  await c.connect();
+  const readiness = vi
+    .spyOn(c, "creationReadiness")
+    .mockImplementation(async () =>
+      withGaslessLock(c.config, owner, async () => ({
+        ready: true,
+        gasless: undefined,
+        gas: 10000000000000000n,
+        flow: "combined" as const,
+        activationSatisfied: true,
+        hasTopUp: true,
+        creating: false,
+        funding: { state: "idle", error: undefined, pollAfter: 5000 },
+      })),
+    );
+  try {
+    await expect(c.topUpGas()).resolves.toBeUndefined();
+    expect(readiness).toHaveBeenCalledOnce();
+    expect(mock.write).not.toHaveBeenCalled();
+  } finally {
+    readiness.mockRestore();
+    if (descriptor) Object.defineProperty(navigator, "locks", descriptor);
+    else Reflect.deleteProperty(navigator, "locks");
+  }
+});

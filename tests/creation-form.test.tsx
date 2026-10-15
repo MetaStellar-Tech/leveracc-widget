@@ -143,3 +143,101 @@ it("rechecks on opt-out changes and discards the old response", async () => {
   await render();
   expect(createButton()).toBeUndefined();
 });
+
+it("does not schedule automatic reads when gasless status needs manual recovery", async () => {
+  check.mockResolvedValue({
+    ...ready,
+    ready: false,
+    gasless: {
+      ready: false,
+      pending: true,
+      disabled: true,
+      autoPoll: false,
+      pollAfter: 10000,
+    },
+  });
+  await render();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60000);
+  });
+  expect(check).toHaveBeenCalledOnce();
+});
+
+it("backs off repeated status failures and resets after a successful query", async () => {
+  const failure = {
+    ...ready,
+    ready: false,
+    gasless: {
+      ready: false,
+      pending: true,
+      disabled: true,
+      error: "serviceError",
+      pollAfter: 10000,
+    },
+  };
+  check
+    .mockResolvedValueOnce(failure)
+    .mockResolvedValueOnce(failure)
+    .mockResolvedValueOnce({
+      ...failure,
+      gasless: { ...failure.gasless, error: undefined, pollAfter: 3000 },
+    })
+    .mockResolvedValue(ready);
+  await render();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10000);
+  });
+  expect(check).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(19999);
+  });
+  expect(check).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  expect(check).toHaveBeenCalledTimes(3);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+  expect(check).toHaveBeenCalledTimes(4);
+});
+
+it("keeps a disabled gasless card visible during the initial eligibility read", async () => {
+  const { resolveConfig } = await import("../src/core/config");
+  const controller = {
+    ...c,
+    config: resolveConfig({
+      network: "mainnet",
+      projectId: `0x${"ab".repeat(32)}`,
+      creationGaslessEthEnabled: true,
+    }),
+    usesBuiltInGasTopUp: true,
+    getSnapshot: () => ({
+      owner: "0x1111111111111111111111111111111111111111",
+    }),
+  } as unknown as WidgetController;
+  check.mockImplementation(() => new Promise(() => {}));
+  await act(async () =>
+    root.render(
+      <CreateAccountForm
+        controller={controller}
+        s={
+          {
+            owner: "0x1111111111111111111111111111111111111111",
+            status: "noAccount",
+            busy: false,
+            reasons: [],
+          } as Snapshot
+        }
+        t={en}
+        onDone={() => {}}
+      />,
+    ),
+  );
+  const button = container.querySelector<HTMLButtonElement>(
+    ".gasless-eth-step button",
+  );
+  expect(button?.disabled).toBe(true);
+  expect(button?.textContent).toContain("Sign to exchange 1 USDC for ETH");
+  expect(container.textContent).not.toContain("Sign & Swap");
+});

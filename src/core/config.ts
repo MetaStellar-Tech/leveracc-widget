@@ -8,6 +8,7 @@ import type { Address } from "viem";
 import type { WidgetConfig } from "../types";
 import { invariant } from "./errors";
 import { resolveColors } from "./colors";
+import { resolveProjects } from "./projects";
 import { parseAmount } from "./amount";
 const presets = {
   mainnet: {
@@ -72,6 +73,7 @@ export function resolveConfig(input: WidgetConfig) {
     "skipCreationTopUpCheck must be a boolean.",
   );
   for (const name of [
+    "creationGaslessEthEnabled",
     "creationGasConversionEnabled",
     "creationAccountActivationEnabled",
   ] as const) {
@@ -81,6 +83,17 @@ export function resolveConfig(input: WidgetConfig) {
       `${name} must be a boolean.`,
     );
   }
+  const creationGaslessEthAmountUsdc =
+    input.creationGaslessEthAmountUsdc === undefined
+      ? "1"
+      : input.creationGaslessEthAmountUsdc;
+  invariant(
+    typeof creationGaslessEthAmountUsdc === "string" &&
+      /^\d+(?:\.\d{1,6})?$/.test(creationGaslessEthAmountUsdc),
+    "INVALID_CONFIG",
+    "creationGaslessEthAmountUsdc must be a positive USDC decimal string with up to six decimals.",
+  );
+  parseAmount(creationGaslessEthAmountUsdc);
   const creationLegacyMode =
     input.creationGasConversionEnabled === undefined &&
     input.creationAccountActivationEnabled === undefined;
@@ -118,6 +131,7 @@ export function resolveConfig(input: WidgetConfig) {
   );
   return {
     ...input,
+    projects: resolveProjects(input.projects),
     projectId: input.projectId.toLowerCase() as typeof input.projectId,
     chain: preset.chain,
     arbitrumChain: input.network === "testnet" ? arbitrumSepolia : arbitrum,
@@ -137,6 +151,8 @@ export function resolveConfig(input: WidgetConfig) {
     ),
     skipCreationTopUpCheck: input.skipCreationTopUpCheck ?? false,
     creationLegacyMode,
+    creationGaslessEthEnabled: input.creationGaslessEthEnabled ?? false,
+    creationGaslessEthAmountUsdc,
     creationGasConversionEnabled: input.creationGasConversionEnabled ?? true,
     creationAccountActivationEnabled:
       input.creationAccountActivationEnabled ?? true,

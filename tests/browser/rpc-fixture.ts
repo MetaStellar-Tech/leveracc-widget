@@ -1,3 +1,4 @@
+import { quoteFixture } from "../gasless-fixtures";
 import type { Page } from "@playwright/test";
 import {
   decodeFunctionData,
@@ -46,6 +47,9 @@ export async function mockBackend(
     skipCreationTopUpCheck?: boolean;
     creationGasConversionEnabled?: boolean;
     creationAccountActivationEnabled?: boolean;
+    creationGaslessEthEnabled?: boolean;
+    creationGaslessEthAmountUsdc?: string;
+    arbitrumEth?: string;
     topUpError?: boolean;
     gasFunding?: boolean;
     delayedCreationReceipt?: boolean;
@@ -56,6 +60,15 @@ export async function mockBackend(
     tradeWithdrawable?: bigint;
   } = {},
 ) {
+  let arbitrumEth = options.arbitrumEth;
+  let gaslessPhase = "processing";
+  let gaslessQuote = quoteFixture("1000000", "1000000");
+  if (options.creationGaslessEthEnabled) {
+    await page.exposeFunction("__completeEth", (failed = false) => {
+      gaslessPhase = failed ? "failed" : "success";
+      if (!failed) arbitrumEth = "0xde0b6b3a7640000";
+    });
+  }
   let creationConfirmed = !options.delayedCreationReceipt;
   if (options.delayedCreationReceipt)
     await page.exposeFunction("__completeCreation", () => {
@@ -91,6 +104,12 @@ export async function mockBackend(
       if (path.endsWith("/config"))
         data = {
           enabled: true,
+          gasless: {
+            enabled: true,
+            source_chain_id: 42161,
+            min_sell_amount_raw: "200000",
+            max_sell_amount_raw: "2000000",
+          },
           min_usdc_amount_raw: "1000000",
           max_usdc_amount_raw: "10000000",
           system_core_account_address: gasReceiver,
@@ -105,7 +124,28 @@ export async function mockBackend(
             daily_eoa_limit_raw: "10000000",
           },
         };
-      else if (path.endsWith("/gas-payment")) data = gasRecord();
+      else if (path.endsWith("/prepare")) {
+        gaslessQuote = quoteFixture(
+          route.request().postDataJSON().sell_amount_raw,
+          "1000000",
+        );
+        data = gaslessQuote;
+      } else if (path.endsWith("/submit")) {
+        gaslessPhase = "processing";
+        data = {
+          trade_hash: gaslessQuote.trade_hash,
+          quote_token: gaslessQuote.quote_token,
+          next_poll_after_seconds: 3,
+        };
+      } else if (path.includes("/status/")) {
+        data = {
+          trade_hash: gaslessQuote.trade_hash,
+          provider: "0x",
+          phase: gaslessPhase,
+          terminal: gaslessPhase !== "processing",
+          next_poll_after_seconds: 3,
+        };
+      } else if (path.endsWith("/gas-payment")) data = gasRecord();
       else
         data = {
           items: options.gasFunding
@@ -452,11 +492,17 @@ export async function mockBackend(
                 : "0x3e6";
           else if (request.method === "eth_estimateGas") result = "0x186a0";
           else if (request.method === "eth_gasPrice") result = "0x1";
+          else if (request.method === "eth_maxPriorityFeePerGas")
+            result = "0x1";
+          else if (request.method === "eth_getBlockByNumber")
+            result = { number: "0x1", baseFeePerGas: "0x1", transactions: [] };
           else if (request.method === "eth_getBalance")
             result =
-              gasReceived || url.includes("arbitrum") || !options.lowGas
-                ? "0xde0b6b3a7640000"
-                : "0x0";
+              url.includes("arbitrum") && arbitrumEth !== undefined
+                ? arbitrumEth
+                : gasReceived || url.includes("arbitrum") || !options.lowGas
+                  ? "0xde0b6b3a7640000"
+                  : "0x0";
           return { jsonrpc: "2.0", id: request.id, result };
         };
         data = Array.isArray(body) ? body.map(rpc) : rpc(body);
@@ -560,6 +606,8 @@ export async function mountMockWidget(
       skipCreationTopUpCheck,
       creationGasConversionEnabled,
       creationAccountActivationEnabled,
+      creationGaslessEthEnabled,
+      creationGaslessEthAmountUsdc,
     }) => {
       document.body.innerHTML =
         '<main style="display:block;max-width:480px;margin:20px auto;padding:12px"><div id="test-widget"></div></main>';
@@ -623,6 +671,8 @@ export async function mountMockWidget(
             skipCreationTopUpCheck,
             creationGasConversionEnabled,
             creationAccountActivationEnabled,
+            creationGaslessEthEnabled,
+            creationGaslessEthAmountUsdc,
           },
           wallet,
           onEvent: (event: any) => (window as any).events.push(event),
@@ -640,6 +690,8 @@ export async function mountMockWidget(
       creationGasConversionEnabled: options?.creationGasConversionEnabled,
       creationAccountActivationEnabled:
         options?.creationAccountActivationEnabled,
+      creationGaslessEthEnabled: options?.creationGaslessEthEnabled,
+      creationGaslessEthAmountUsdc: options?.creationGaslessEthAmountUsdc,
     },
   );
 }

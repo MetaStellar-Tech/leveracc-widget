@@ -36,7 +36,17 @@ export interface WidgetColors {
   shadow: string;
 }
 
+export interface ProjectInfo {
+  projectId: Hex;
+  name?: string;
+  description?: Partial<Record<"en" | "zh", string>>;
+  logo?: string;
+  repayUrl?: string;
+}
+
 export interface WidgetConfig {
+  /** Add projects or override built-in metadata by case-insensitive project ID. */
+  projects?: readonly ProjectInfo[];
   projectId: Hex;
   network: Network;
   rpcUrl?: string;
@@ -49,6 +59,10 @@ export interface WidgetConfig {
   creationGasConversionEnabled?: boolean;
   /** Enable activation funding before creation. Defaults to true. */
   creationAccountActivationEnabled?: boolean;
+  /** Enable gasless Arbitrum ETH exchange before built-in creation funding. Defaults to false. */
+  creationGaslessEthEnabled?: boolean;
+  /** USDC to sell for ETH, with up to six decimals. Defaults to "1". */
+  creationGaslessEthAmountUsdc?: string;
   locale?: "en" | "zh";
   theme?: "light" | "dark";
   primaryColor?: string;

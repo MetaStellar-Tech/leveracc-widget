@@ -184,3 +184,27 @@ const config = {
 本地测试覆盖 SDK 适配、owner 校验、SDK 切链、未知链添加、断连/异步清理、宿主钱包弹窗交互及资金流程。真实 Privy 登录、WalletConnect 会话和链上资金操作需要用户自己的 app/project 配置与钱包；构建或模拟测试通过不代表已完成线上联调。
 
 参考官方接口：[viem Wallet Client](https://viem.sh/docs/clients/wallet)、[wagmi useConnect](https://wagmi.sh/react/api/hooks/useConnect)、[Privy 钱包连接](https://docs.privy.io/wallets/connectors/usage/connect-or-create)。示例 SDK 版本与相邻 dapp 对齐。
+
+## 创建前 Gasless 兑换 Arbitrum ETH
+
+设置 `creationGaslessEthEnabled: true` 后，当 Fund Account（当前连接的 owner 钱包）的 Arbitrum ETH 不足以支付下一笔创建付款的 Gas 时，弹窗提供免 Gas 的 USDC → ETH 兑换。此开关默认为 `false`。`creationGaslessEthAmountUsdc` 默认为 `"1"`，必须是正数 USDC 十进制字符串，最多六位小数。金额由集成方设置，用户无法在弹窗修改。此金额表示花费的 USDC，并非保证获得的 ETH 数量。
+
+```ts
+const config = {
+  projectId,
+  network: "mainnet",
+  locale: "zh",
+  creationGaslessEthEnabled: true,
+  creationGaslessEthAmountUsdc: "1",
+} as const;
+```
+
+Widget 估算实际 USDC 转账所需的 Gas，并增加 20% 余量，ETH 余额为零时也可检测。组合准备和仅兑换 Gas 流程额外保留 3 USDC，仅激活流程额外保留 1.1 USDC。例如，默认兑换 1 USDC 加组合准备至少需要 4 USDC。兑换受服务独立的 Gasless 最低和最高限额约束，最低金额至少为 0.2 USDC；金额不符合要求时显示错误，不会悄悄修改配置。
+
+该步骤仅适用于内置主网 Arbitrum 创建付款。测试网、无需付款、已完成付款，以及宿主提供 `onGasTopUp` 时跳过。它使用现有 `protocolServiceUrl` 和 `arbitrumRpcUrl`；后者需支持通过原生余额状态覆盖估算 Gas。打开弹窗不会发起兑换：用户点击后，签署钱包归属消息及服务的类型化交易／可选 Permit。本次兑换不需要链上授权交易。
+
+提交前，Widget 校验报价、钱包、链、代币、收款人、有效期、最低输出和可用 USDC。使用的接口为 `/api/v1/gas-top-ups/config`、`/prepare`、`/submit` 和 `/status/{trade_hash}`。待处理兑换在提交前保存，重新打开或刷新后恢复查询；提交结果不确定时查询状态，不自动重新提交。发起兑换需要浏览器存储和 Web Locks 支持。若服务受理兑换后保存新的交易哈希／查询凭证失败，Widget 仅在当前页面内保留这组信息。请保持该页面打开，恢复浏览器存储并等待自动状态检查完成保存后，再重新加载或关闭页面。恢复记录按网络、服务地址和钱包隔离；修改配置金额不会丢弃待处理兑换。当前服务的状态查询凭证在准备报价后 24 小时过期。保留本地记录或刷新不会续期，也不能保证过期后恢复；请保留记录并联系支持核实交易后再处理。状态接口返回 HTTP 401/403/404 或交易信息不匹配时，暂停自动轮询；保留待处理记录以防止重复提交，重新打开弹窗会触发新的检查。若本地限流在请求发送前阻止提交，稍后可以重试；HTTP 失败或超时则保留恢复跟踪。若用户签名期间已有足够的 ETH 到账，Widget 会取消尚未提交的兑换，不花费 USDC。
+
+检查条件期间，弹窗保持 Gasless 卡片展示并禁用按钮。收到已校验的报价后，在请求类型化签名前展示最低 ETH 到账金额。临时状态查询错误采用指数退避，最长 60 秒；服务端要求更长等待时间时遵循服务端间隔。确认终态后清除过时的提交错误提示。
+
+服务成功后，Widget 等待 ETH 到账并重新确认 Gas 足够，随后显示现有付款按钮。用户需明确操作以继续创建付款，该转账前还会再次检查 Gas。兑换不可用或 Gas 仍不足时，用户可以手动补充 Arbitrum ETH，并等待自动余额检查。临时错误会自动检查，明确失败后允许用户主动重试；待处理兑换必须先确定状态，才能再次提交兑换。
